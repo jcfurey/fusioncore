@@ -17,7 +17,7 @@ fusioncore:
     base_frame: base_link    # must match your robot's base TF frame
     odom_frame: odom
     publish_rate: 100.0
-    publish.force_2d: true   # zeroes Z position and Z velocity. Use for ground robots.
+    publish.force_2d: true   # zeroes Z position and Z velocity in published output. Use for ground robots.
 
     # ── IMU ──────────────────────────────────────────────────────────────────
     imu.gyro_noise: 0.005       # rad/s: from your IMU datasheet (ARW spec)

@@ -47,6 +47,43 @@ Then launch without the remap: FusionCore subscribes to `/odom/wheels` natively 
 
 ---
 
+## Using RTABMAP alongside FusionCore (Madgwick separation)
+
+RTABMAP's `icp_odometry` and the `rtabmap_slam` node both expect IMU data on `/imu/data`. FusionCore also subscribes to `/imu/data` — but it needs **raw** gyro and accelerometer data, not a Madgwick-filtered orientation.
+
+If you run `imu_filter_madgwick` in your stack, do **not** remap FusionCore's IMU input to the Madgwick output. The Madgwick filter bakes in a coordinate frame rotation based on its world-frame orientation estimate. When FusionCore receives that, it tries to fuse an already-rotated orientation as if it were raw rates — the result is the robot appearing to spin or roll when it isn't.
+
+**Correct setup:**
+
+```
+/imu  (raw from driver)
+  ├── → FusionCore    (via -r /imu/data:=/imu)
+  └── → imu_filter_madgwick  → /imu/data  → RTABMAP + icp_odometry
+```
+
+In your launch file:
+
+```python
+# FusionCore reads raw IMU directly
+fc = LifecycleNode(
+    ...
+    remappings=[
+        ("/imu/data", "/imu"),     # raw, not Madgwick output
+    ]
+)
+
+# Madgwick runs separately for RTABMAP and ICP
+Node(
+    package='imu_filter_madgwick', executable='imu_filter_madgwick_node',
+    parameters=[{'use_mag': False, 'world_frame': 'enu', 'publish_tf': False}],
+    remappings=[('imu/data_raw', '/imu')],   # reads same raw /imu
+),
+```
+
+FusionCore handles orientation estimation internally from raw gyro + accel. Madgwick is only needed to give RTABMAP and ICP odometry the filtered `/imu/data` they expect.
+
+---
+
 ## SLAM integration (slam_toolbox, RTABMAP)
 
 FusionCore and your SLAM system divide the TF tree cleanly:

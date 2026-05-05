@@ -6,6 +6,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.2.2]: 2026-05-05
+
+### Fixed
+- **`init.stationary_window` hangs with zero-timestamp IMU drivers**: the bias window used message timestamps to measure elapsed time. IMU drivers that publish `stamp={sec=0, nanosec=0}` caused the window to never complete, silently blocking filter initialization and preventing `/fusion/odom` from publishing. Window timing now uses wall clock (`this->now()`), making it immune to message timestamp values.
+- **`publish.force_2d` incomplete**: `force_2d: true` zeroed `position.z` in the published odometry and TF but left `twist.linear.z` (vertical velocity) non-zero. For a ground robot, publishing a non-zero VZ is misleading. Both are now zeroed consistently.
+
+### Added
+- **Troubleshooting page**: covers the most common failure modes — lifecycle not activating, Madgwick filter conflict, zero-timestamp IMU drivers, TF conflicts, outlier gate tuning, and more.
+- **RTABMAP + Madgwick separation guide** in `icp-indoor.md`: documents the correct IMU topic split when running FusionCore alongside RTABMAP and `icp_odometry`.
+
+---
+
 ## [0.2.1]: 2026-04-28
 
 ### Fixed

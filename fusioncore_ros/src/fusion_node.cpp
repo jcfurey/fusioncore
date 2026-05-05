@@ -1233,7 +1233,7 @@ private:
 
     odom.twist.twist.linear.x  = s.x[fusioncore::VX];
     odom.twist.twist.linear.y  = s.x[fusioncore::VY];
-    odom.twist.twist.linear.z  = s.x[fusioncore::VZ];
+    odom.twist.twist.linear.z  = force_2d_ ? 0.0 : s.x[fusioncore::VZ];
     odom.twist.twist.angular.x = s.x[fusioncore::WX];
     odom.twist.twist.angular.y = s.x[fusioncore::WY];
     odom.twist.twist.angular.z = s.x[fusioncore::WZ];
