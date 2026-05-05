@@ -627,7 +627,7 @@ private:
         // Static bias window: collect IMU samples before starting the filter.
         if (!init_window_collecting_) {
           init_window_collecting_ = true;
-          init_window_start_      = t;
+          init_window_start_      = this->now().seconds();  // wall clock: immune to zero msg timestamps
           init_window_aborted_    = false;
           init_win_n_             = 0;
           init_win_wx_ = init_win_wy_ = init_win_wz_ = 0.0;
@@ -658,8 +658,8 @@ private:
           ++init_win_orient_n_;
         }
 
-        // Window complete?
-        if (t - init_window_start_ >= init_window_duration_) {
+        // Window complete? Compare wall clock elapsed against duration.
+        if (this->now().seconds() - init_window_start_ >= init_window_duration_) {
           fusioncore::State initial;
           initial.P = fusioncore::StateMatrix::Identity() * 0.1;
           initial.P(0,0) = 1000.0;
