@@ -25,7 +25,7 @@
 bt_navigator:
   ros__parameters:
     use_sim_time: false
-    global_frame: map
+    global_frame: odom
     robot_base_frame: base_link
     odom_topic: /fusion/odom         # must point to FusionCore's odometry output
     bt_loop_duration: 10
@@ -158,17 +158,15 @@ global_costmap:
       use_sim_time: false
       update_frequency: 1.0
       publish_frequency: 1.0
-      global_frame: map
+      global_frame: odom
       robot_base_frame: base_link
       robot_radius: 0.55
       resolution: 0.05
       track_unknown_space: true     # true = plan through unknown (GPS-nav mode)
-      plugins: ["static_layer", "inflation_layer"]
-      static_layer:
-        plugin: "nav2_costmap_2d::StaticLayer"
-        map_subscribe_transient_local: true
-        # No map server needed for GPS-only: publish an empty map or remove this layer
-        # and set track_unknown_space: true + allow_unknown: true in the planner.
+      plugins: ["inflation_layer"]
+      # No static_layer: FusionCore is GPS-only, no map server needed.
+      # If you add slam_toolbox, restore: plugins: ["static_layer", "inflation_layer"]
+      # and change global_frame: map here and in bt_navigator + behavior_server.
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
@@ -201,7 +199,7 @@ behavior_server:
     wait:
       plugin: "nav2_behaviors::Wait"
     local_frame: odom
-    global_frame: map
+    global_frame: odom
     robot_base_frame: base_link
     transform_tolerance: 0.1
     simulate_ahead_time: 2.0
