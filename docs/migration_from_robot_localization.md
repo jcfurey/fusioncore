@@ -214,10 +214,12 @@ velocity_smoother:
   ros__parameters:
     odom_topic: /fusion/odom        # was /odometry/filtered
 
-# if you had AMCL, remove it: FusionCore handles global localization via GPS
+# if you had AMCL and are doing GPS-only outdoor navigation, remove it
 ```
 
-Also remove AMCL if you had it. FusionCore publishes `odom → base_link` TF and a `/fromLL` service for GPS waypoint navigation. AMCL publishes `map → odom` for map-based localization, which is not needed when GPS provides global positioning and will conflict with the TF tree.
+**GPS-only outdoor navigation (no map):** remove AMCL. It has nothing to localize against without a static map, and the Nav2 `global_frame` must be set to `odom` everywhere — see [Nav2 Integration](nav2.md).
+
+**Indoor navigation with a map:** keep AMCL. FusionCore publishes `odom → base_link`. AMCL publishes `map → odom`. These are different TF edges and are fully compatible — there is no conflict.
 
 ---
 
