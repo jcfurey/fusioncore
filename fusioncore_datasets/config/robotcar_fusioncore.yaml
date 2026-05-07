@@ -1,0 +1,59 @@
+fusioncore:
+  ros__parameters:
+    base_frame: base_link
+    odom_frame: odom
+    publish_rate: 100.0
+
+    # NovAtel SPAN-CPT IMU (MEMS grade, integrated in the GPS/INS unit)
+    # Gyro ARW: ~0.07 deg/sqrt(hr) -> noise density ~0.005 rad/s/sqrt(Hz)
+    # Accel VRW: ~0.05 m/s/sqrt(hr) -> noise density ~0.1 m/s^2/sqrt(Hz)
+    # Note: IMU is synthesized from INS derivatives so these are approximate.
+    imu.gyro_noise: 0.005
+    imu.accel_noise: 0.1
+    imu.has_magnetometer: false
+    imu.remove_gravitational_acceleration: false   # synthesized IMU includes gravity
+
+    # Wheel odometry: synthesized from INS forward velocity component
+    encoder.vel_noise: 0.05
+    encoder.yaw_noise: 0.02
+
+    # GPS: raw gps/gps.csv if available (~3-5m CEP), or ins positions + 3m noise.
+    # var_xy = sigma^2 = 9.0 -> base_noise_xy=1.0 means sigma = sqrt(var_xy) * 1.0
+    gnss.base_noise_xy: 1.0
+    gnss.base_noise_z: 1.0
+    gnss.max_hdop: 10.0
+    gnss.min_satellites: 0
+    gnss.min_fix_type: 1
+    gnss.heading_topic: ""
+    gnss.azimuth_topic: ""
+
+    gnss.lever_arm_x: 0.0
+    gnss.lever_arm_y: 0.0
+    gnss.lever_arm_z: 0.0
+
+    outlier_rejection: true
+    outlier_threshold_gnss: 16.27    # chi2(3, 0.999)
+    outlier_threshold_enc:  11.34    # chi2(3, 0.999)
+    outlier_threshold_imu:  15.09    # chi2(6, 0.999)
+    gnss.coast_n: 3
+    gnss.coast_q_factor: 200.0
+
+    adaptive.imu: true
+    adaptive.encoder: true
+    adaptive.gnss: true
+    adaptive.window: 50
+    adaptive.alpha: 0.01
+
+    # UKF process noise: tuned for a car-size platform at urban driving speeds
+    ukf.q_position:    0.01
+    ukf.q_orientation: 1.0e-9
+    ukf.q_velocity:    0.5
+    ukf.q_angular_vel: 0.5
+    ukf.q_acceleration: 2.0
+    ukf.q_gyro_bias:   1.0e-5
+    ukf.q_accel_bias:  1.0e-5
+
+    input.gnss_crs: "EPSG:4326"
+    output.crs: "EPSG:4978"
+    output.convert_to_enu_at_reference: true
+    reference.use_first_fix: true

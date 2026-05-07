@@ -5,6 +5,7 @@ find_package(ament_cmake REQUIRED)
 
 install(PROGRAMS
   scripts/nclt_player.py
+  scripts/robotcar_player.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

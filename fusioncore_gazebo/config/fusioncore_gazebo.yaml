@@ -4,6 +4,7 @@ fusioncore:
     odom_frame: odom
     publish_rate: 100.0
 
+    imu.frame_id: "fusioncore_robot/imu_link/imu_sensor"
     imu.gyro_noise: 0.005
     imu.accel_noise: 0.1
     imu.has_magnetometer: false
