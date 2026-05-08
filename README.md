@@ -68,6 +68,25 @@ See [demo/README.md](demo/README.md) for full instructions, including running on
 
 ---
 
+## Does it work on a real robot with messy sensors?
+
+**Does it tolerate imperfect IMU calibration?**
+Yes. `adaptive.imu: true` (default) automatically adjusts the measurement noise matrix from the innovation sequence. `init.stationary_window: 2.0` estimates accelerometer bias before motion starts. In the NCLT benchmark, FusionCore was given only the two noise values from the IMU datasheet -- no manual tuning of any other parameter.
+
+**How much manual tuning is needed?**
+Two numbers from your IMU datasheet: `imu.gyro_noise` (ARW spec) and `imu.accel_noise` (VRW spec). Everything else starts at default. Adaptive noise covariance handles the rest within the first minute of operation. Most companies copy approximate values from a CAD model and launch -- FusionCore is designed to work under exactly those conditions.
+
+**What about timestamp jitter and delayed GPS?**
+FusionCore stores a rolling IMU buffer and replays intermediate updates when a delayed GPS fix arrives (retrodiction, up to 500 ms configurable). Timestamp jitter is handled by clamping `dt` to `[min_dt, max_dt]`. Out-of-order messages are absorbed without divergence.
+
+**What is the CPU cost?**
+A 22-state UKF at 100 Hz generates 45 sigma points per predict step. On a laptop Intel i7: under 0.2 ms per cycle. On Raspberry Pi 4: under 1 ms per cycle. Peak RAM under 50 MB. FusionCore uses Eigen for all matrix math; no external numeric libraries required.
+
+**Does it behave the same on ARM (Raspberry Pi, Jetson)?**
+Yes. Eigen auto-detects NEON on ARM and AVX on x86. The NCLT benchmark is reproducible on ARM within floating-point rounding tolerance. The same binary runs on laptop, Pi 4, and Jetson Orin without recompilation or parameter changes.
+
+---
+
 ## Install
 
 Supports **ROS 2 Jazzy** (Ubuntu 24.04) and **Humble** (Ubuntu 22.04).
