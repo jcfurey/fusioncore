@@ -1,8 +1,10 @@
 #pragma once
 
 #include "fusioncore/state.hpp"
+#include "fusioncore/motion_model.hpp"
 #include <Eigen/Dense>
 #include <functional>
+#include <memory>
 
 namespace fusioncore {
 
@@ -75,11 +77,18 @@ public:
   void set_position_noise_scale(double s) { pos_noise_scale_ = s; }
   double position_noise_scale() const     { return pos_noise_scale_; }
 
+  // Replace the default motion model (ConstantVelocityAcceleration).
+  // Call before the first predict() step.
+  void set_motion_model(std::shared_ptr<MotionModelBase> model) {
+    if (model) motion_model_ = std::move(model);
+  }
+
 private:
   UKFParams params_;
   State state_;
   bool   initialized_      = false;
   double pos_noise_scale_  = 1.0;
+  std::shared_ptr<MotionModelBase> motion_model_;
 
   // UKF weights
   int n_aug_;          // augmented state dimension
@@ -96,9 +105,6 @@ private:
   // Generate 2n+1 sigma points from current state.
   // Repairs state_.P in-place if it has lost positive-definiteness.
   Eigen::MatrixXd generate_sigma_points();
-
-  // Motion model f(x, dt): propagates a single sigma point
-  StateVector process_model(const StateVector& x, double dt) const;
 
   // Normalize angle to [-pi, pi]
   static double normalize_angle(double angle);

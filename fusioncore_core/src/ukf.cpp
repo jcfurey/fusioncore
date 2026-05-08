@@ -1,11 +1,13 @@
 #include "fusioncore/ukf.hpp"
+#include "fusioncore/motion_model.hpp"
 #include <cmath>
 #include <stdexcept>
 
 namespace fusioncore {
 
 UKF::UKF(const UKFParams& params)
-  : params_(params), initialized_(false)
+  : params_(params), initialized_(false),
+    motion_model_(std::make_shared<ConstantVelocityAcceleration>())
 {
   n_aug_  = STATE_DIM;
   lambda_ = params_.alpha * params_.alpha * (n_aug_ + params_.kappa) - n_aug_;
@@ -102,66 +104,6 @@ Eigen::MatrixXd UKF::generate_sigma_points() {
   return sigma;
 }
 
-StateVector UKF::process_model(const StateVector& x, double dt) const {
-  StateVector x_new = x;
-
-  // ── Position: p += R(q) * v * dt ─────────────────────────────────────────
-  // Normalize the quaternion before use: sigma points generated from P may not
-  // be exactly unit quaternions, and an unnormalized q gives a non-orthogonal R.
-  double qnorm = std::sqrt(x[QW]*x[QW] + x[QX]*x[QX] + x[QY]*x[QY] + x[QZ]*x[QZ]);
-  double qw = x[QW]/qnorm, qx = x[QX]/qnorm, qy = x[QY]/qnorm, qz = x[QZ]/qnorm;
-  double vx = x[VX], vy = x[VY], vz = x[VZ];
-
-  double R00 = 1 - 2*(qy*qy + qz*qz);
-  double R01 =     2*(qx*qy - qw*qz);
-  double R02 =     2*(qx*qz + qw*qy);
-  double R10 =     2*(qx*qy + qw*qz);
-  double R11 = 1 - 2*(qx*qx + qz*qz);
-  double R12 =     2*(qy*qz - qw*qx);
-  double R20 =     2*(qx*qz - qw*qy);
-  double R21 =     2*(qy*qz + qw*qx);
-  double R22 = 1 - 2*(qx*qx + qy*qy);
-
-  x_new[X] += dt * (R00*vx + R01*vy + R02*vz);
-  x_new[Y] += dt * (R10*vx + R11*vy + R12*vz);
-  x_new[Z] += dt * (R20*vx + R21*vy + R22*vz);
-
-  // ── Orientation: exact quaternion kinematics ──────────────────────────────
-  // q_new = q ⊗ exp(ω * dt / 2). Exact for constant ω over dt; no singularity.
-  // WX/WY/WZ are true angular rates: do NOT subtract gyro bias here.
-  // Bias enters only in the IMU measurement model (z = true_rate + bias).
-  double wx = x[WX], wy = x[WY], wz = x[WZ];
-  double omega_mag = std::sqrt(wx*wx + wy*wy + wz*wz);
-  double dqw, dqx, dqy, dqz;
-  if (omega_mag > 1e-10) {
-    double half = 0.5 * omega_mag * dt;
-    double s = std::sin(half) / omega_mag;
-    dqw = std::cos(half);
-    dqx = s * wx; dqy = s * wy; dqz = s * wz;
-  } else {
-    dqw = 1.0;
-    dqx = 0.5*wx*dt; dqy = 0.5*wy*dt; dqz = 0.5*wz*dt;
-  }
-  // Scale result back by qnorm so the sigma point retains its original magnitude.
-  // Without this, normalizing (q+ε) before kinematics then returning a unit
-  // quaternion creates an asymmetry: the Wm[0]≈-99 term amplifies the error and
-  // the weighted mean drifts away from the true mean on S³. Multiplying back by
-  // qnorm makes process_model act as a linear map for the quaternion components
-  // when ω≈0, so x_pred = weighted_mean = initial quaternion (exact). The final
-  // normalize_state() in predict() restores unit norm after the mean is computed.
-  x_new[QW] = (qw*dqw - qx*dqx - qy*dqy - qz*dqz) * qnorm;
-  x_new[QX] = (qw*dqx + qx*dqw + qy*dqz - qz*dqy) * qnorm;
-  x_new[QY] = (qw*dqy - qx*dqz + qy*dqw + qz*dqx) * qnorm;
-  x_new[QZ] = (qw*dqz + qx*dqy - qy*dqx + qz*dqw) * qnorm;
-
-  // ── Velocity: integrate body-frame acceleration ───────────────────────────
-  x_new[VX] += dt * x[AX];
-  x_new[VY] += dt * x[AY];
-  x_new[VZ] += dt * x[AZ];
-
-  return x_new;
-}
-
 void UKF::predict(double dt) {
   if (!initialized_)
     throw std::runtime_error("FusionCore: predict() called before init()");
@@ -169,7 +111,7 @@ void UKF::predict(double dt) {
   int n_sigma = 2 * n_aug_ + 1;
   Eigen::MatrixXd sigma_pred(STATE_DIM, n_sigma);
   for (int i = 0; i < n_sigma; ++i)
-    sigma_pred.col(i) = process_model(sigma.col(i), dt);
+    sigma_pred.col(i) = motion_model_->predict(sigma.col(i), dt);
   // Quaternion sign consistency: q and -q represent the same rotation, but
   // their weighted sum does not. Flip any sigma point whose quaternion is in
   // the opposite hemisphere from sigma_pred[0] before averaging.

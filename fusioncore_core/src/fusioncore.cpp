@@ -92,7 +92,11 @@ void FusionCore::adapt_R(
 
 FusionCore::FusionCore(const FusionCoreConfig& config)
   : config_(config), ukf_(config.ukf)
-{}
+{
+  if (config.motion_model) {
+    ukf_.set_motion_model(config.motion_model);
+  }
+}
 
 void FusionCore::init(const State& initial_state, double timestamp_seconds) {
   ukf_.init(initial_state);

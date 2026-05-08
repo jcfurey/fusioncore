@@ -1,4 +1,5 @@
 #include "fusioncore/fusioncore.hpp"
+#include "fusioncore/motion_model.hpp"
 #include "fusioncore/sensors/gnss.hpp"
 
 #include <rclcpp/rclcpp.hpp>
@@ -23,6 +24,9 @@
 #include "fusioncore_ros/srv/from_ll.hpp"
 #include <mutex>
 #include <optional>
+#include <set>
+#include <fstream>
+#include <sstream>
 #include <proj.h>
 
 using namespace std::chrono_literals;
@@ -181,6 +185,27 @@ public:
     // Only activates if the robot is stationary during the window (encoder check).
     declare_parameter("init.stationary_window", 0.0);
 
+    // Wait for all configured sensors before starting the filter (default false).
+    // When true, FusionCore holds initialization until every subscribed sensor
+    // has published at least one message, so the filter starts with a full set
+    // of measurements rather than drifting on IMU alone.
+    // init.sensor_wait_timeout: give up and start anyway after this many seconds.
+    declare_parameter("init.wait_for_all_sensors", false);
+    declare_parameter("init.sensor_wait_timeout",  10.0);
+
+    // Checkpoint path for deterministic replay (save/load filter state).
+    // ~/save_checkpoint saves the current state to this file.
+    // ~/load_checkpoint restores state from this file (re-run from any point in a bag).
+    declare_parameter("replay.checkpoint_path",
+      std::string("/tmp/fusioncore_checkpoint.txt"));
+
+    // Motion model: controls how sigma points are propagated in the predict step.
+    // "ConstantVelocityAcceleration" (default): no platform constraints.
+    // "DifferentialDrive": zeros lateral velocity (VY) each predict step.
+    // "Ackermann": same lateral constraint; wheelbase stored for future extensions.
+    declare_parameter("motion_model", std::string("ConstantVelocityAcceleration"));
+    declare_parameter("motion_model_params.wheelbase", 0.55);
+
     declare_parameter("ukf.q_position",     0.01);
     declare_parameter("ukf.q_orientation",  1e-9);
     declare_parameter("ukf.q_velocity",     0.1);
@@ -310,7 +335,28 @@ public:
     zupt_angular_threshold_  = get_parameter("zupt.angular_threshold").as_double();
     zupt_noise_sigma_        = get_parameter("zupt.noise_sigma").as_double();
 
-    init_window_duration_ = get_parameter("init.stationary_window").as_double();
+    init_window_duration_    = get_parameter("init.stationary_window").as_double();
+    wait_for_all_sensors_    = get_parameter("init.wait_for_all_sensors").as_bool();
+    sensor_wait_timeout_     = get_parameter("init.sensor_wait_timeout").as_double();
+    checkpoint_path_         = get_parameter("replay.checkpoint_path").as_string();
+
+    const std::string motion_model_name =
+      get_parameter("motion_model").as_string();
+    const double wheelbase =
+      get_parameter("motion_model_params.wheelbase").as_double();
+
+    if (!motion_model_name.empty() &&
+        motion_model_name != "ConstantVelocityAcceleration" &&
+        motion_model_name != "CVA") {
+      try {
+        config.motion_model = fusioncore::create_motion_model(
+          motion_model_name, {{"wheelbase", wheelbase}});
+        RCLCPP_INFO(get_logger(), "Motion model: %s", motion_model_name.c_str());
+      } catch (const std::exception& e) {
+        RCLCPP_ERROR(get_logger(), "%s", e.what());
+        return CallbackReturn::FAILURE;
+      }
+    }
 
     fc_ = std::make_unique<fusioncore::FusionCore>(config);
 
@@ -520,6 +566,94 @@ public:
         response->map_point.z = enu[2];
       });
 
+    // Checkpoint services: save/load full filter state for deterministic replay.
+    save_checkpoint_srv_ = create_service<std_srvs::srv::Trigger>(
+      "~/save_checkpoint",
+      [this](const std_srvs::srv::Trigger::Request::SharedPtr,
+             std_srvs::srv::Trigger::Response::SharedPtr response)
+      {
+        std::lock_guard<std::mutex> lock(fc_mutex_);
+        if (!fc_->is_initialized()) {
+          response->success = false;
+          response->message = "Filter not initialized.";
+          return;
+        }
+        std::ofstream f(checkpoint_path_);
+        if (!f) {
+          response->success = false;
+          response->message = "Cannot open: " + checkpoint_path_;
+          return;
+        }
+        const auto& s = fc_->get_state();
+        f << "t=" << last_imu_time_ << "\n";
+        f << "x=";
+        for (int i = 0; i < fusioncore::STATE_DIM; ++i)
+          f << s.x[i] << (i + 1 < fusioncore::STATE_DIM ? " " : "\n");
+        f << "P=";
+        for (int r = 0; r < fusioncore::STATE_DIM; ++r)
+          for (int c = 0; c < fusioncore::STATE_DIM; ++c)
+            f << s.P(r, c) <<
+              (r == fusioncore::STATE_DIM - 1 && c == fusioncore::STATE_DIM - 1 ? "\n" : " ");
+        response->success = true;
+        response->message = "Saved to " + checkpoint_path_;
+        RCLCPP_INFO(get_logger(), "State checkpoint saved to %s at t=%.3f",
+          checkpoint_path_.c_str(), last_imu_time_);
+      });
+
+    load_checkpoint_srv_ = create_service<std_srvs::srv::Trigger>(
+      "~/load_checkpoint",
+      [this](const std_srvs::srv::Trigger::Request::SharedPtr,
+             std_srvs::srv::Trigger::Response::SharedPtr response)
+      {
+        std::lock_guard<std::mutex> lock(fc_mutex_);
+        std::ifstream f(checkpoint_path_);
+        if (!f) {
+          response->success = false;
+          response->message = "Cannot open: " + checkpoint_path_;
+          return;
+        }
+        fusioncore::State restored;
+        double t = 0.0;
+        std::string line;
+        while (std::getline(f, line)) {
+          if (line.substr(0, 2) == "t=") {
+            t = std::stod(line.substr(2));
+          } else if (line.substr(0, 2) == "x=") {
+            std::istringstream ss(line.substr(2));
+            for (int i = 0; i < fusioncore::STATE_DIM; ++i) ss >> restored.x[i];
+          } else if (line.substr(0, 2) == "P=") {
+            std::istringstream ss(line.substr(2));
+            for (int r = 0; r < fusioncore::STATE_DIM; ++r)
+              for (int c = 0; c < fusioncore::STATE_DIM; ++c)
+                ss >> restored.P(r, c);
+          }
+        }
+        fc_->init(restored, t);
+        response->success = true;
+        response->message = "Loaded from " + checkpoint_path_;
+        RCLCPP_INFO(get_logger(), "State checkpoint loaded from %s at t=%.3f",
+          checkpoint_path_.c_str(), t);
+      });
+
+    // Sensor wait: populate the expected set based on configured sources.
+    if (wait_for_all_sensors_) {
+      sensors_expected_.clear();
+      sensors_received_.clear();
+      sensor_wait_done_ = false;
+      sensors_expected_.insert("IMU");
+      sensors_expected_.insert("Encoder");
+      if (reference_use_first_fix_)        sensors_expected_.insert("GNSS");
+      if (!encoder2_topic_.empty())        sensors_expected_.insert("Encoder2");
+      if (!gnss_vel_topic_.empty())        sensors_expected_.insert("GPSVel");
+      if (!radar_vel_topic_.empty())       sensors_expected_.insert("RadarVel");
+      if (!heading_topic_.empty() ||
+          !azimuth_topic_.empty())         sensors_expected_.insert("Heading");
+      if (!gnss2_topic_.empty())           sensors_expected_.insert("GNSS2");
+      activate_time_ = this->now().seconds();
+      RCLCPP_INFO(get_logger(), "Waiting for %zu sensor(s) before starting filter.",
+        sensors_expected_.size());
+    }
+
     RCLCPP_INFO(get_logger(), "FusionCore active. Listening for sensors.");
     return CallbackReturn::SUCCESS;
   }
@@ -541,6 +675,11 @@ public:
     diag_timer_.reset();
     reset_srv_.reset();
     from_ll_srv_.reset();
+    save_checkpoint_srv_.reset();
+    load_checkpoint_srv_.reset();
+    sensors_expected_.clear();
+    sensors_received_.clear();
+    sensor_wait_done_ = false;
     odom_pub_.reset();
     pose_pub_.reset();
     diag_pub_.reset();
@@ -647,6 +786,19 @@ private:
 
   // ─── IMU callback: with frame transform ──────────────────────────────────
 
+  // Helper: mark a sensor as received for the sensor-wait feature.
+  void mark_sensor_received(const std::string& name) {
+    if (wait_for_all_sensors_ && sensors_expected_.count(name))
+      sensors_received_.insert(name);
+  }
+
+  // Helper: format a set of sensor names as "A, B, C" for log messages.
+  static std::string format_sensor_set(const std::set<std::string>& s) {
+    std::string out;
+    for (const auto& n : s) { if (!out.empty()) out += ", "; out += n; }
+    return out;
+  }
+
   void imu_callback(const sensor_msgs::msg::Imu::SharedPtr msg)
   {
     double t = rclcpp::Time(msg->header.stamp).seconds();
@@ -655,8 +807,36 @@ private:
     // message timestamp. This avoids a large dead prediction step when
     // use_sim_time:true and /clock hasn't started before on_activate().
     last_imu_time_ = t;
+    mark_sensor_received("IMU");
 
     if (pending_init_) {
+      // Sensor wait gate: hold initialization until all expected sensors checked in.
+      if (wait_for_all_sensors_ && !sensor_wait_done_) {
+        if (sensors_received_ != sensors_expected_) {
+          double elapsed = this->now().seconds() - activate_time_;
+          if (elapsed < sensor_wait_timeout_) {
+            std::set<std::string> missing;
+            for (const auto& s : sensors_expected_)
+              if (!sensors_received_.count(s)) missing.insert(s);
+            RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000,
+              "Waiting for sensors (%.1fs / %.1fs): missing [%s]",
+              elapsed, sensor_wait_timeout_, format_sensor_set(missing).c_str());
+            return;
+          }
+          std::set<std::string> missing;
+          for (const auto& s : sensors_expected_)
+            if (!sensors_received_.count(s)) missing.insert(s);
+          RCLCPP_WARN(get_logger(),
+            "Sensor wait timed out after %.1fs. Missing: [%s]. Starting anyway.",
+            sensor_wait_timeout_, format_sensor_set(missing).c_str());
+        } else {
+          RCLCPP_INFO(get_logger(),
+            "All %zu configured sensors ready. Starting filter.",
+            sensors_expected_.size());
+        }
+        sensor_wait_done_ = true;
+      }
+
       if (init_window_duration_ <= 0.0) {
         fusioncore::State initial;
         initial.P = fusioncore::StateMatrix::Identity() * 0.1;
@@ -670,7 +850,12 @@ private:
         // Static bias window: collect IMU samples before starting the filter.
         if (!init_window_collecting_) {
           init_window_collecting_ = true;
-          init_window_start_      = this->now().seconds();  // wall clock: immune to zero msg timestamps
+          // Use message timestamp when valid (non-zero): makes the window deterministic
+          // during bag replay with use_sim_time:true. Fall back to wall clock only for
+          // drivers that publish zero-stamped messages (the original bug fix path).
+          init_window_start_is_msg_time_ = (t > 0.0);
+          init_window_start_ = init_window_start_is_msg_time_
+            ? t : this->now().seconds();
           init_window_aborted_    = false;
           init_win_n_             = 0;
           init_win_wx_ = init_win_wy_ = init_win_wz_ = 0.0;
@@ -701,8 +886,11 @@ private:
           ++init_win_orient_n_;
         }
 
-        // Window complete? Compare wall clock elapsed against duration.
-        if (this->now().seconds() - init_window_start_ >= init_window_duration_) {
+        // Window complete? Use same time source that was chosen at window start.
+        double window_elapsed = init_window_start_is_msg_time_
+          ? (t - init_window_start_)
+          : (this->now().seconds() - init_window_start_);
+        if (window_elapsed >= init_window_duration_) {
           fusioncore::State initial;
           initial.P = fusioncore::StateMatrix::Identity() * 0.1;
           initial.P(0,0) = 1000.0;
@@ -905,6 +1093,7 @@ private:
 
   void encoder_callback(const nav_msgs::msg::Odometry::SharedPtr msg)
   {
+    mark_sensor_received("Encoder");
     // If collecting the bias window, abort it if the robot moves.
     if (init_window_collecting_) {
       double speed = std::abs(msg->twist.twist.linear.x);
@@ -960,6 +1149,7 @@ private:
 
   void encoder2_callback(const nav_msgs::msg::Odometry::SharedPtr msg)
   {
+    mark_sensor_received("Encoder2");
     if (!fc_->is_initialized()) return;
 
     double t = rclcpp::Time(msg->header.stamp).seconds();
@@ -989,6 +1179,7 @@ private:
 
   void radar_vel_callback(const nav_msgs::msg::Odometry::SharedPtr msg)
   {
+    mark_sensor_received("RadarVel");
     if (!fc_->is_initialized()) return;
 
     const double t  = rclcpp::Time(msg->header.stamp).seconds();
@@ -1012,6 +1203,7 @@ private:
 
   void gnss_vel_callback(const nav_msgs::msg::Odometry::SharedPtr msg)
   {
+    mark_sensor_received("GPSVel");
     if (!fc_->is_initialized()) return;
 
     const double t  = rclcpp::Time(msg->header.stamp).seconds();
@@ -1037,6 +1229,8 @@ private:
 
   void gnss_callback(const sensor_msgs::msg::NavSatFix::SharedPtr msg, int source_id = 0)
   {
+    if (source_id == 0) mark_sensor_received("GNSS");
+    else                mark_sensor_received("GNSS2");
     if (!fc_->is_initialized()) return;
 
     if (msg->status.status < 0) return;
@@ -1197,6 +1391,7 @@ private:
 
   void gnss_heading_callback(const sensor_msgs::msg::Imu::SharedPtr msg)
   {
+    mark_sensor_received("Heading");
     if (!fc_->is_initialized()) return;
 
     double t = rclcpp::Time(msg->header.stamp).seconds();
@@ -1256,6 +1451,7 @@ private:
 
   void azimuth_callback(const compass_msgs::msg::Azimuth::SharedPtr msg)
   {
+    mark_sensor_received("Heading");
     if (!fc_->is_initialized()) return;
 
     double t = rclcpp::Time(msg->header.stamp).seconds();
@@ -1629,11 +1825,12 @@ private:
   bool        pending_init_        = false;
 
   // Static bias initialization window
-  double init_window_duration_   = 0.0;
-  bool   init_window_collecting_ = false;
-  bool   init_window_aborted_    = false;
-  double init_window_start_      = 0.0;
-  int    init_win_n_             = 0;
+  double init_window_duration_         = 0.0;
+  bool   init_window_collecting_       = false;
+  bool   init_window_aborted_          = false;
+  double init_window_start_            = 0.0;
+  bool   init_window_start_is_msg_time_ = false;  // true: msg timestamps; false: wall clock
+  int    init_win_n_                   = 0;
   double init_win_wx_ = 0.0, init_win_wy_ = 0.0, init_win_wz_ = 0.0;
   double init_win_ax_ = 0.0, init_win_ay_ = 0.0, init_win_az_ = 0.0;
   double init_win_qw_ = 0.0, init_win_qx_ = 0.0, init_win_qy_ = 0.0, init_win_qz_ = 0.0;
@@ -1661,6 +1858,19 @@ private:
   rclcpp::CallbackGroup::SharedPtr sensor_cb_group_;
   rclcpp::CallbackGroup::SharedPtr publish_cb_group_;
   std::mutex fc_mutex_;
+
+  // Sensor wait (#28)
+  bool                     wait_for_all_sensors_ = false;
+  double                   sensor_wait_timeout_  = 10.0;
+  double                   activate_time_        = 0.0;
+  bool                     sensor_wait_done_     = false;
+  std::set<std::string>    sensors_expected_;
+  std::set<std::string>    sensors_received_;
+
+  // Deterministic replay checkpoint (#27)
+  std::string checkpoint_path_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr save_checkpoint_srv_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr load_checkpoint_srv_;
 
   // PROJ coordinate transform members
   std::string input_gnss_crs_;

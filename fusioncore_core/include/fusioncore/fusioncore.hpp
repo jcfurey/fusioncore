@@ -1,6 +1,7 @@
 #pragma once
 #include "fusioncore/ukf.hpp"
 #include "fusioncore/state.hpp"
+#include "fusioncore/motion_model.hpp"
 #include "fusioncore/sensors/imu.hpp"
 #include "fusioncore/sensors/encoder.hpp"
 #include "fusioncore/sensors/gnss.hpp"
@@ -60,6 +61,10 @@ struct FusionCoreConfig {
   // How many IMU messages to keep for full replay retrodiction.
   // At 100Hz IMU and 500ms max delay: 50 messages minimum.
   int imu_buffer_size = 100;
+
+  // Optional custom motion model. nullptr = use ConstantVelocityAcceleration (default).
+  // Set via create_motion_model("DifferentialDrive") etc. before passing to FusionCore.
+  std::shared_ptr<MotionModelBase> motion_model = nullptr;
 
   // Zero-velocity update (ZUPT) parameters
   // Velocity threshold below which the robot is considered stationary (m/s and rad/s)
