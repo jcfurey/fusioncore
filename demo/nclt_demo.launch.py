@@ -1,5 +1,5 @@
 """
-FusionCore live demo -- replays the NCLT demo bag through FusionCore
+FusionCore live demo: replays the NCLT demo bag through FusionCore
 and records the output trajectory for comparison with ground truth.
 
 Does NOT require robot_localization. The comparison plot uses pre-baked

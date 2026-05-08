@@ -18,7 +18,7 @@ I needed sensor fusion for a mobile robot project and reached for `robot_localiz
 
 So I built FusionCore. It's a 22-state UKF that fuses IMU, wheel encoders, GPS position, GPS velocity, and radar Doppler ego-velocity natively. Gyro and accelerometer bias are estimated continuously as filter states. Noise covariance adapts from the innovation sequence automatically. Every sensor update goes through a chi-squared gate before it touches the filter. GPS is handled in ECEF directly, no coordinate projection.
 
-GPS velocity fusion (from any receiver that publishes Doppler velocity, like the u-blox F9P) compares GPS-reported speed against wheel-reported speed on every filter cycle. The innovation directly reveals wheel slip -- the Kalman gain automatically down-weights a slipping wheel in proportion to how much it disagrees with GPS. Radar Doppler velocity fusion works the same way but using radio wave physics instead of satellites: it functions indoors, in rain, fog, dust, and complete darkness.
+GPS velocity fusion (from any receiver that publishes Doppler velocity, like the u-blox F9P) compares GPS-reported speed against wheel-reported speed on every filter cycle. The innovation directly reveals wheel slip: the Kalman gain automatically down-weights a slipping wheel in proportion to how much it disagrees with GPS. Radar Doppler velocity fusion works the same way but using radio wave physics instead of satellites, so it functions indoors, in rain, fog, dust, and complete darkness.
 
 <p align="center">
   <img src="figures/fig2_traj_grid.png" alt="Trajectory overlay: all 6 sequences, SE3-aligned to RTK GPS ground truth" width="650">
@@ -45,7 +45,7 @@ RL-EKF run with `odom0_twist_rejection_threshold: 4.03` and `odom1_pose_rejectio
 
 ## Try it yourself
 
-**No ROS required -- 30 seconds:**
+**No ROS required (30 seconds):**
 
 ```bash
 git clone https://github.com/manankharwar/fusioncore && cd fusioncore
@@ -55,7 +55,7 @@ python3 tools/demo_quick.py --open
 
 Generates a side-by-side trajectory comparison from the NCLT benchmark results included in the repository. No datasets to download, no ROS installation needed.
 
-**Live demo with real sensor data -- 5 minutes:**
+**Live demo with real sensor data (5 minutes):**
 
 ```bash
 # Build FusionCore, then:
@@ -71,10 +71,10 @@ See [demo/README.md](demo/README.md) for full instructions, including running on
 ## Does it work on a real robot with messy sensors?
 
 **Does it tolerate imperfect IMU calibration?**
-Yes. `adaptive.imu: true` (default) automatically adjusts the measurement noise matrix from the innovation sequence. `init.stationary_window: 2.0` estimates accelerometer bias before motion starts. In the NCLT benchmark, FusionCore was given only the two noise values from the IMU datasheet -- no manual tuning of any other parameter.
+Yes. `adaptive.imu: true` (default) automatically adjusts the measurement noise matrix from the innovation sequence. `init.stationary_window: 2.0` estimates accelerometer bias before motion starts. In the NCLT benchmark, FusionCore was given only the two noise values from the IMU datasheet with no manual tuning of any other parameter.
 
 **How much manual tuning is needed?**
-Two numbers from your IMU datasheet: `imu.gyro_noise` (ARW spec) and `imu.accel_noise` (VRW spec). Everything else starts at default. Adaptive noise covariance handles the rest within the first minute of operation. Most companies copy approximate values from a CAD model and launch -- FusionCore is designed to work under exactly those conditions.
+Two numbers from your IMU datasheet: `imu.gyro_noise` (ARW spec) and `imu.accel_noise` (VRW spec). Everything else starts at default. Adaptive noise covariance handles the rest within the first minute of operation. Most companies copy approximate values from a CAD model and launch. FusionCore is designed to work under exactly those conditions.
 
 **What about timestamp jitter and delayed GPS?**
 FusionCore stores a rolling IMU buffer and replays intermediate updates when a delayed GPS fix arrives (retrodiction, up to 500 ms configurable). Timestamp jitter is handled by clamping `dt` to `[min_dt, max_dt]`. Out-of-order messages are absorbed without divergence.

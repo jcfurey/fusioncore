@@ -16,10 +16,10 @@ pip install numpy matplotlib
 python3 tools/demo_quick.py --open
 ```
 
-Output: `demo_result.png` -- a side-by-side trajectory comparison.
+Output: `demo_result.png` (a side-by-side trajectory comparison).
 
 ```
-FusionCore demo -- NCLT 2012-01-08 (pre-baked results)
+FusionCore demo: NCLT 2012-01-08 (pre-baked results)
   FusionCore  ATE RMSE:  5.55 m
   RL-EKF      ATE RMSE: 13.01 m
   FusionCore is 2.3x more accurate
@@ -61,7 +61,7 @@ Total wall-clock time: about 4 minutes.
 
 ### What the demo bag contains
 
-120 seconds from the [NCLT 2012-01-08 sequence](http://robots.engin.umich.edu/nclt/) -- a Segway RMP400 driving a campus route at the University of Michigan. Topics:
+120 seconds from the [NCLT 2012-01-08 sequence](http://robots.engin.umich.edu/nclt/), a Segway RMP400 driving a campus route at the University of Michigan. Topics:
 
 | Topic | Rate | Description |
 |---|---|---|
@@ -69,7 +69,7 @@ Total wall-clock time: about 4 minutes.
 | `/odom/wheels` | 100 Hz | Wheel encoder velocity |
 | `/gnss/fix` | ~5 Hz | Standard GPS (not RTK) |
 
-FusionCore config: `fusioncore_datasets/config/nclt_fusioncore.yaml` -- default settings, no tuning.
+FusionCore config: `fusioncore_datasets/config/nclt_fusioncore.yaml` (default settings, no tuning).
 
 ### Manual step-by-step (if you prefer)
 
@@ -132,7 +132,7 @@ python3 demo/make_demo_bag.py \
 ## Frequently asked questions
 
 **Does it work with imperfect IMU calibration?**
-Yes. `adaptive.imu: true` (default) adjusts the measurement noise matrix automatically based on the innovation sequence. The `init.stationary_window` parameter estimates accelerometer bias before motion starts. In the demo, FusionCore is given only the IMU datasheet noise values -- no manual tuning.
+Yes. `adaptive.imu: true` (default) adjusts the measurement noise matrix automatically based on the innovation sequence. The `init.stationary_window` parameter estimates accelerometer bias before motion starts. In the demo, FusionCore is given only the IMU datasheet noise values with no manual tuning.
 
 **How much manual tuning is needed?**
 Two numbers from your IMU datasheet: `imu.gyro_noise` (ARW spec) and `imu.accel_noise` (VRW spec). Everything else can start at default values. Adaptive noise handles the rest within the first minute of operation.

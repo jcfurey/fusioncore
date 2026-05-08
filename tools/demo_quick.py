@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-FusionCore quick demo -- no ROS required.
+FusionCore quick demo (no ROS required).
 
 Generates a comparison plot from pre-baked NCLT benchmark results included
 in the repository. Shows FusionCore vs robot_localization EKF vs RTK GPS
@@ -114,7 +114,7 @@ def ate_rmse(est_ts, est_x, est_y, gt_ts, gt_x, gt_y):
 def run(out_path: Path, open_after: bool, live_tum: Path = None):
     using_live = live_tum is not None and Path(live_tum).exists()
     mode_str   = "live run" if using_live else "pre-baked results"
-    print(f"FusionCore demo -- NCLT 2012-01-08 ({mode_str})")
+    print(f"FusionCore demo: NCLT 2012-01-08 ({mode_str})")
     print(f"  Loading trajectories from {SEQ_DIR.relative_to(REPO_ROOT)} ...")
 
     gt_ts, gt_x, gt_y, _ = load_tum(SEQ_DIR / 'ground_truth.tum')
@@ -148,14 +148,14 @@ def run(out_path: Path, open_after: bool, live_tum: Path = None):
     xlo, xhi = all_x.min() - pad, all_x.max() + pad
     ylo, yhi = all_y.min() - pad, all_y.max() + pad
 
-    fig.text(0.5, 0.97, 'FusionCore vs robot_localization -- NCLT 2012-01-08',
+    fig.text(0.5, 0.97, 'FusionCore vs robot_localization  |  NCLT 2012-01-08',
              ha='center', fontsize=18, fontweight='bold', color=TEXT)
     fig.text(0.5, 0.955, '600 s campus drive  |  RTK GPS ground truth  |  SE(2) aligned',
              ha='center', fontsize=11, color=MUTED)
 
     for ax, (traj_al, label, color, ate) in zip(axes, [
-        (ek_al, f'robot_localization EKF  --  ATE {ek_ate:.1f} m', C_EKF, ek_ate),
-        (fc_al, f'FusionCore  --  ATE {fc_ate:.1f} m',             C_FC,  fc_ate),
+        (ek_al, f'robot_localization EKF  |  ATE {ek_ate:.1f} m', C_EKF, ek_ate),
+        (fc_al, f'FusionCore  |  ATE {fc_ate:.1f} m',             C_FC,  fc_ate),
     ]):
         ax.set_facecolor(BG)
         ax.tick_params(colors=MUTED, labelsize=9)
@@ -177,7 +177,7 @@ def run(out_path: Path, open_after: bool, live_tum: Path = None):
         is_winner = (ate == min(fc_ate, ek_ate))
         badge_bg  = '#DCFCE7' if is_winner else '#FEE2E2'
         badge_tc  = '#15803D' if is_winner else '#B91C1C'
-        badge_txt = f'{"WINNER" if is_winner else "LOSER"}  --  ATE {ate:.1f} m'
+        badge_txt = f'{"WINNER" if is_winner else "LOSER"}  |  ATE {ate:.1f} m'
         ax.text(0.03, 0.97, badge_txt,
                 transform=ax.transAxes, fontsize=10, color=badge_tc,
                 fontweight='bold', va='top',
