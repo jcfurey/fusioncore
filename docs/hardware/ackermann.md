@@ -12,17 +12,18 @@ Two things to set in your config:
 
 ```yaml
 motion_model: "Ackermann"
-motion_model_params.wheelbase: 0.32   # metres — see below
+motion_model_params.wheelbase: 0.32   # metres (see table below)
 ```
 
-**Wheelbase** is the distance between the centre of your front axle and the centre of your rear axle, measured in metres. Get it wrong and the filter's motion predictions will be slightly off. Measure it physically on your robot rather than looking it up online — manufacturing tolerances vary.
+**Wheelbase** is the distance between the centre of your front axle and the centre of your rear axle, measured in metres. Get it wrong and the filter's motion predictions will be slightly off. Measure it physically on your robot rather than looking it up online: manufacturing tolerances vary.
 
 | Platform | Typical wheelbase |
 |---|---|
 | F1/10 scale car (Traxxas Slash base) | ~0.32 m |
 | F1/10 scale car (AckerBot, MIT Racecar) | ~0.32–0.34 m |
 | Golf cart | ~1.8 m |
-| Ford Transit full-size van | ~3.75 m |
+| Ford Transit full-size van (130" WB) | ~3.30 m |
+| Ford Transit full-size van (148" WB) | ~3.75 m |
 | Mercedes Sprinter | ~3.67 m |
 | Ford Transit Connect (compact van) | ~2.73 m |
 
@@ -39,6 +40,8 @@ ros2 launch fusioncore_ros fusioncore.launch.py \
   -r /odom/wheels:=/vesc/odom \
   -r /imu/data:=/camera/imu
 ```
+
+Note: the D435i IMU topic changed between driver versions. Use `/camera/imu` with `realsense2_camera` v3.x, or `/camera/camera/imu` with v4.x (ROS 2 Humble and later). Check with `ros2 topic list | grep imu` after launching the camera node.
 
 If you're using KISS-ICP or RealSense T265 visual odometry as a second velocity source, uncomment `encoder2.topic` in `f1tenth_indoor.yaml`:
 

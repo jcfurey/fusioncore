@@ -161,8 +161,7 @@ fusioncore:
     # "Ackermann": same lateral constraint as DifferentialDrive.
     #   wheelbase stored for future minimum-turning-radius extensions.
     #   Use for: car-like robots, forklifts, front-steered outdoor platforms.
-    motion_model_params:
-      wheelbase: 0.55    # meters (only used by Ackermann)
+    motion_model_params.wheelbase: 0.55    # metres (only used by Ackermann)
 
     # ── Deterministic replay ──────────────────────────────────────────────────
     replay.checkpoint_path: "/tmp/fusioncore_checkpoint.txt"

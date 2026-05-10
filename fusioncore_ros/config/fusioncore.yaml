@@ -4,10 +4,10 @@ fusioncore:
     odom_frame: odom
     publish_rate: 100.0
 
-    # Force 2D output: zeroes the Z position in the published odometry and TF.
+    # Force 2D output: zeroes position.z, velocity.z, and the TF translation.z.
     # For ground robots where altitude is irrelevant (lawn mowers, AGVs, vacuums).
     # Prevents GPS altitude noise or IMU Z drift from shifting the costmap plane.
-    # Orientation (roll/pitch) is untouched: only position.z is forced to zero.
+    # Orientation (roll/pitch) is untouched.
     # Leave false for any robot that actually moves in 3D (drones, arms, boats).
     publish.force_2d: false
 
@@ -25,7 +25,7 @@ fusioncore:
     #
     #   false (default): IMU publishes raw specific force (~9.81 m/s² upward at rest).
     #            This is the standard ROS convention (sensor_msgs/Imu spec).
-    #            Most drivers (Gazebo NavSat, ZED, Realsense) do NOT remove gravity.
+    #            Most drivers (Gazebo NavSat, Realsense D435i) do NOT remove gravity.
     #            Leave false: the filter handles gravity internally.
     #
     #   true: Your driver already subtracted gravity and publishes true linear
@@ -47,14 +47,13 @@ fusioncore:
     encoder.yaw_noise: 0.02
 
     # Optional second encoder-twist source (e.g. KISS-ICP LiDAR odometry).
-    # When non-empty, FusionCore subscribes to this topic as nav_msgs/Odometry
-    # and fuses twist.linear.x/y + twist.angular.z via the same update_encoder
-    # path as the primary wheel encoder. Per-axis covariance is taken from the
-    # message twist.covariance when positive; otherwise adaptive/config noise
-    # is used. Does not drive ZUPT or ground-constraint updates (those remain
-    # anchored to the primary wheel encoder). Leave empty to disable.
+    # Must publish nav_msgs/Odometry with velocity in the twist field.
+    # Does not drive ZUPT or ground-constraint updates (anchored to primary encoder).
+    # Leave empty to disable.
     # encoder2.topic: "/kiss/odometry"
     encoder2.topic: ""
+    encoder2.vel_noise: 0.05   # m/s  fallback when message covariance is zero
+    encoder2.yaw_noise: 0.02   # rad/s fallback when message covariance is zero
 
     gnss.base_noise_xy: 1.0
     gnss.base_noise_z: 2.0

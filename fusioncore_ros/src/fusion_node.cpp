@@ -90,9 +90,11 @@ public:
     // When non-empty, FusionCore subscribes to this topic as nav_msgs/Odometry
     // and fuses twist.linear.x/y + twist.angular.z using the same update_encoder
     // path as the primary wheel encoder. Per-axis covariance is taken from the
-    // message twist.covariance when positive; otherwise adaptive/config noise
-    // is used. Leave empty to disable.
-    declare_parameter("encoder2.topic", std::string(""));
+    // message twist.covariance when positive; otherwise encoder2.vel_noise and
+    // encoder2.yaw_noise are used as fallback. Leave empty to disable.
+    declare_parameter("encoder2.topic",     std::string(""));
+    declare_parameter("encoder2.vel_noise", 0.05);
+    declare_parameter("encoder2.yaw_noise", 0.02);
 
     // GPS velocity topic: fuses horizontal speed from any receiver that outputs
     // nav_msgs/Odometry with velocity in the ENU (world) frame.
@@ -247,7 +249,9 @@ public:
     config.encoder.vel_noise_y  = config.encoder.vel_noise_x;
     config.encoder.vel_noise_wz = get_parameter("encoder.yaw_noise").as_double();
 
-    encoder2_topic_    = get_parameter("encoder2.topic").as_string();
+    encoder2_topic_     = get_parameter("encoder2.topic").as_string();
+    enc2_vel_noise_     = get_parameter("encoder2.vel_noise").as_double();
+    enc2_yaw_noise_     = get_parameter("encoder2.yaw_noise").as_double();
     gnss_vel_topic_    = get_parameter("gnss.velocity_topic").as_string();
     radar_vel_topic_   = get_parameter("radar.velocity_topic").as_string();
     radar_vel_noise_   = get_parameter("radar.vel_noise").as_double();
@@ -1161,12 +1165,12 @@ private:
 
     // Extract per-axis variances from the Odometry twist covariance (6x6, row-major).
     // Indices: vx=0, vy=7, wz=35 (diagonal elements for linear.x, linear.y, angular.z).
-    // Pass -1.0 for any axis where the message reports zero or negative variance,
-    // so update_encoder falls back to adaptive/config noise for that axis.
+    // Fall back to encoder2.vel_noise / encoder2.yaw_noise when the message
+    // reports zero or negative variance (e.g. KISS-ICP, RealSense T265).
     const auto& cov = msg->twist.covariance;
-    double var_vx = (cov[0]  > 0.0) ? cov[0]  : -1.0;
-    double var_vy = (cov[7]  > 0.0) ? cov[7]  : -1.0;
-    double var_wz = (cov[35] > 0.0) ? cov[35] : -1.0;
+    double var_vx = (cov[0]  > 0.0) ? cov[0]  : enc2_vel_noise_ * enc2_vel_noise_;
+    double var_vy = (cov[7]  > 0.0) ? cov[7]  : enc2_vel_noise_ * enc2_vel_noise_;
+    double var_wz = (cov[35] > 0.0) ? cov[35] : enc2_yaw_noise_ * enc2_yaw_noise_;
 
     const double vx = msg->twist.twist.linear.x;
     const double vy = msg->twist.twist.linear.y;
@@ -1824,6 +1828,8 @@ private:
   std::string gnss2_topic_;
   std::string azimuth_topic_;
   std::string encoder2_topic_;
+  double      enc2_vel_noise_ = 0.05;
+  double      enc2_yaw_noise_ = 0.02;
   std::string gnss_vel_topic_;
   std::string radar_vel_topic_;
   double      radar_vel_noise_ = 0.1;
