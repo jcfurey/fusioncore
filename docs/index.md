@@ -1,6 +1,6 @@
 # FusionCore
 
-**ROS 2 UKF sensor fusion. IMU + wheel encoders + GPS + GPS velocity + radar Doppler → one position estimate. No manual noise tuning. Apache 2.0.**
+**ROS 2 UKF sensor fusion. IMU (+ optional second IMU) + wheel encoders + GPS + GPS velocity + radar Doppler → one position estimate. No manual noise tuning. Apache 2.0.**
 
 [![CI](https://github.com/manankharwar/fusioncore/actions/workflows/ci.yml/badge.svg)](https://github.com/manankharwar/fusioncore/actions/workflows/ci.yml)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19834991.svg)](https://doi.org/10.5281/zenodo.19834991)
@@ -13,7 +13,7 @@ FusionCore is a 22-state UKF that fuses IMU, wheel encoders, GPS position, GPS v
 
 It publishes `/fusion/odom` and the full `odom → base_link` TF. Nav2 consumes it directly.
 
-GPS is optional. FusionCore runs fine on IMU + wheel odometry alone for indoor robots. GPS velocity and radar velocity are each independently optional: enable whichever sensors you have.
+GPS is optional. FusionCore runs fine on IMU + wheel odometry alone for indoor robots. GPS velocity and radar velocity are each independently optional: enable whichever sensors you have. A second IMU (`imu2.topic`) is also supported for platforms with dual sensors.
 
 ---
 

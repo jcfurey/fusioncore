@@ -325,6 +325,7 @@ Know these before you migrate:
 | Feature | robot_localization | FusionCore |
 |---|---|---|
 | Multiple independent odometry sources | yes (odom0, odom1, ...) | primary wheel odom + one secondary via `encoder2.topic` |
+| Multiple IMUs | yes (imu0, imu1, ...) | primary `/imu/data` + one secondary via `imu2.topic` |
 | Configurable state vector | yes (per-sensor config booleans) | fixed 22D state (position, orientation, velocity, biases) |
 | Arbitrary sensor plugins | yes (extensible) | IMU, wheel odometry, GPS only |
 | Published filtered GPS | `publish_filtered_gps: true` | not currently supported |

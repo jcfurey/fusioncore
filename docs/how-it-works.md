@@ -66,6 +66,9 @@ Fuses the orientation derived by a separate filter (e.g. `imu_filter_madgwick`).
 
 These are two separate Kalman update steps with independent outlier gates. The `outlier_threshold_imu` config key applies to both.
 
+**Second IMU (`imu2.topic`)**
+When configured, FusionCore subscribes to a second IMU topic and runs the same two update steps for each message, treating the second sensor as an independent measurement of the same state. Both IMUs call `update_imu()` separately: the filter fuses their independent noise realizations rather than averaging them before ingestion. Useful on platforms with two IMUs (e.g. VESC built-in + RealSense D435i) when you want redundancy without pre-merging them externally. Both IMUs share the same noise model and `imu.has_magnetometer` flag. Leave `imu2.topic: ""` to disable.
+
 ---
 
 ## Mahalanobis outlier rejection
@@ -290,6 +293,7 @@ FusionCore knows which sensors to wait for based on what you have configured:
 | GPS velocity | `gnss.velocity_topic` is non-empty |
 | Radar velocity | `radar.velocity_topic` is non-empty |
 | Heading | `gnss.heading_topic` or `gnss.azimuth_topic` is non-empty |
+| Second IMU | `imu2.topic` is non-empty |
 | Second encoder | `encoder2.topic` is non-empty |
 | Second GNSS | `gnss.fix2_topic` is non-empty |
 

@@ -21,6 +21,7 @@ Pick the row that matches your sensors. Everything else follows from there.
 | Standard GPS → RTK fixed | `gnss.base_noise_xy: 0.015`, `gnss.min_fix_type: 4` |
 | 6-axis IMU → 9-axis (BNO085, VectorNav) | `imu.has_magnetometer: true` |
 | Add dual GPS antenna heading | `gnss.heading_topic: "/gnss/heading"` |
+| Add a second IMU (dual IMU redundancy) | `imu2.topic: "/your/second/imu"` |
 | Add Nav2 | Use `fusioncore_nav2.launch.py` instead of `fusioncore.launch.py` |
 | Urban vs open sky GPS noise | Layer an [environment preset](environment-presets.md) on top |
 

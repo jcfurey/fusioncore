@@ -4,7 +4,8 @@
 
 | Topic | Type | Notes |
 |---|---|---|
-| `/imu/data` | `sensor_msgs/Imu` | IMU angular velocity and linear acceleration |
+| `/imu/data` | `sensor_msgs/Imu` | Primary IMU angular velocity and linear acceleration |
+| `imu2.topic` | `sensor_msgs/Imu` | Second IMU (optional): fused as independent measurement of same state |
 | `/odom/wheels` | `nav_msgs/Odometry` | Wheel encoder velocity |
 | `/gnss/fix` | `sensor_msgs/NavSatFix` | GPS position (optional) |
 | `/gnss/heading` | `sensor_msgs/Imu` | Dual antenna heading (optional) |
