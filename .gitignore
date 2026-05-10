@@ -76,8 +76,8 @@ demo/*.mcap
 demo_result.png
 
 # Benchmark runtime artifacts: logs and raw bags are generated, not source
-benchmarks/*/results/launch.log
-benchmarks/nclt/*/bag/
+benchmarks/**/launch.log
+benchmarks/**/bag/
 
 # Paper source: only the PDF is committed
 paper/*.tex
