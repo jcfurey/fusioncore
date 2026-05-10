@@ -12,9 +12,6 @@ fusioncore:
     imu.has_magnetometer: false         # 6-axis mode: yaw from GPS track only
     imu.remove_gravitational_acceleration: false  # NCLT IMU includes gravity (raw specific force)
 
-    # Segway RMP is differential drive
-    motion_model: "DifferentialDrive"
-
     # Segway RMP wheel encoders via odometry_mu_100hz.csv (differentiated)
     encoder.vel_noise: 0.05
     encoder.yaw_noise: 0.02
