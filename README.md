@@ -81,35 +81,6 @@ Most sensor fusion tutorials assume clean data. Real robots don't have clean dat
 
 ---
 
-## Try it without hardware
-
-**No ROS, no robot, 30 seconds:**
-
-```bash
-git clone https://github.com/manankharwar/fusioncore && cd fusioncore
-pip install numpy matplotlib
-python3 tools/demo_quick.py --open
-```
-
-Shows two things from pre-baked NCLT benchmark data included in the repo:
-
-- **GPS spike rejection:** a 707 m corrupted GPS fix is injected at t=120 s. FusionCore's chi-squared gate blocks it (position moves 1 m). robot_localization EKF accepts it and deviates 50+ m before recovering.
-- **Overall accuracy:** FusionCore 5.6 m ATE vs RL-EKF 13.0 m ATE over a 600 s campus drive. RL-UKF diverges with NaN at t=31 s.
-
-<p align="center">
-  <img src="docs/assets/fig_spike_demo.png" alt="FusionCore GPS spike rejection demo: trajectory and error timeline" width="750">
-</p>
-
-**Live demo with real sensor data:**
-
-```bash
-bash demo/run_demo.sh
-```
-
-Downloads a 5 MB demo bag and runs FusionCore live against 120 seconds of real outdoor robot data (IMU + wheel odometry + GPS).
-
----
-
 ## Benchmark
 
 FusionCore vs robot_localization on the [NCLT dataset](http://robots.engin.umich.edu/nclt/): same IMU + wheel odometry + GPS, no manual tuning. Six 30-minute sequences. RL-EKF run with chi-squared-equivalent thresholds at 99.9% confidence.
