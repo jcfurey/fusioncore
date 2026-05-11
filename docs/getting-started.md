@@ -82,77 +82,69 @@ ros2 topic hz /fusion/odom
 
 ---
 
-## Test every feature without hardware
+## Verify it works (single command)
 
-You can verify all FusionCore features using fake sensor data. Open 4 terminals:
-
-**Terminal 1: launch:**
 ```bash
+bash tools/quick_test.sh
+```
+
+Starts FusionCore with fake sensors, runs through configure → activate, checks all outputs. Takes about 15 seconds. Prints `[PASS]` / `[FAIL]` for each check.
+
+Expected output:
+
+```
+  FusionCore Quick Test
+  =====================
+
+  [....] Sourcing ROS environment...
+  [PASS] ROS environment sourced
+  [....] Starting TF publishers...
+  [....] Launching FusionCore...
+  [PASS] Lifecycle: configure → activate
+  [....] Publishing fake IMU at 100 Hz (stationary, gravity pointing up)...
+  [....] Publishing fake wheel odometry at 50 Hz (stationary)...
+  [....] Waiting 6 s for filter to initialize...
+
+  Checks:
+  -------
+  [PASS] /fusion/odom publishing (main output)
+  [PASS] /fusion/pose publishing
+  [PASS] /diagnostics publishing
+  [PASS] /fusioncore/reset service responds
+
+  All checks passed. FusionCore is working correctly.
+```
+
+If a check fails, the script prints the exact diagnostic command to run next.
+
+!!! note "Docker"
+    The script also runs inside the container:
+    ```bash
+    docker run --rm -it ghcr.io/manankharwar/fusioncore:latest bash tools/quick_test.sh
+    ```
+
+---
+
+## Manual verification (if you want to inspect each output)
+
+If you want to observe the filter behavior directly rather than run the automated check:
+
+```bash
+# Terminal 1: launch
 source /opt/ros/jazzy/setup.bash && source ~/ros2_ws/install/setup.bash
 ros2 launch fusioncore_ros fusioncore.launch.py
-```
 
-**Terminal 2: configure and activate:**
-```bash
+# Terminal 2: TF + lifecycle
 source /opt/ros/jazzy/setup.bash && source ~/ros2_ws/install/setup.bash
-
 ros2 run tf2_ros static_transform_publisher --frame-id base_link --child-frame-id imu_link &
 ros2 run tf2_ros static_transform_publisher --frame-id odom --child-frame-id base_link &
-sleep 1
+sleep 1 && ros2 lifecycle set /fusioncore configure
+sleep 1 && ros2 lifecycle set /fusioncore activate
 
-ros2 lifecycle set /fusioncore configure
-sleep 1
-ros2 lifecycle set /fusioncore activate
-```
-
-**Terminal 3: feed fake sensors:**
-```bash
-source /opt/ros/jazzy/setup.bash && source ~/ros2_ws/install/setup.bash
-
-# IMU at 100Hz (stationary, gravity up)
-ros2 topic pub /imu/data sensor_msgs/msg/Imu "{
-  header: {frame_id: 'base_link'},
-  angular_velocity: {x: 0.0, y: 0.0, z: 0.0},
-  linear_acceleration: {x: 0.0, y: 0.0, z: 9.81},
-  orientation_covariance: [-1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-}" --rate 100 &
-
-# Wheel encoder at 50Hz (stationary)
-ros2 topic pub /odom/wheels nav_msgs/msg/Odometry "{
-  header: {frame_id: 'odom'},
-  twist: {twist: {linear: {x: 0.0}, angular: {z: 0.0}}}
-}" --rate 50 &
-
-# GPS at 5Hz (Hamilton, Ontario)
-ros2 topic pub /gnss/fix sensor_msgs/msg/NavSatFix "{
-  header: {frame_id: 'base_link'},
-  status: {status: 0},
-  latitude: 43.2557,
-  longitude: -79.8711,
-  altitude: 100.0,
-  position_covariance: [1.0, 0, 0, 0, 1.0, 0, 0, 0, 4.0],
-  position_covariance_type: 2
-}" --rate 5
-```
-
-**Terminal 4: verify:**
-```bash
-source /opt/ros/jazzy/setup.bash && source ~/ros2_ws/install/setup.bash
-
-# Check topics are live
-ros2 topic list | grep fusion
-
-# Odometry at 100Hz
-ros2 topic hz /fusion/odom
-
-# Per-sensor diagnostics
+# Terminal 3: diagnostics
 ros2 topic echo /diagnostics --once
-
-# Velocity near zero while stationary (ZUPT working)
+ros2 topic hz /fusion/odom
 ros2 topic echo /fusion/odom --field twist.twist.linear
-
-# Reset service
-ros2 service call /fusioncore/reset std_srvs/srv/Trigger
 ```
 
 You should see `/fusion/odom`, `/fusion/pose`, and `/fusioncore/reset` in the topic/service list.

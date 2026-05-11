@@ -14,7 +14,16 @@
 
 ## Install
 
-Supports **ROS 2 Jazzy** (Ubuntu 24.04) and **Humble** (Ubuntu 22.04).
+**Option A: Docker (no ROS install required)**
+
+```bash
+docker pull ghcr.io/manankharwar/fusioncore:latest
+docker run --rm -it ghcr.io/manankharwar/fusioncore:latest bash
+```
+
+FusionCore and all dependencies are pre-built. The container includes `tools/quick_test.sh` and the full benchmark dataset.
+
+**Option B: From source** — Supports **ROS 2 Jazzy** (Ubuntu 24.04) and **Humble** (Ubuntu 22.04).
 
 ```bash
 mkdir -p ~/ros2_ws/src && cd ~/ros2_ws/src
@@ -31,6 +40,14 @@ colcon build && source install/setup.bash
 ros2 launch fusioncore_ros fusioncore_nav2.launch.py \
   fusioncore_config:=/path/to/your_robot.yaml
 ```
+
+**Verify it works** (single command, replaces the 4-terminal manual test):
+
+```bash
+bash tools/quick_test.sh
+```
+
+Starts FusionCore with fake sensors and checks all outputs in about 15 seconds. Prints `[PASS]` / `[FAIL]` for each check.
 
 ---
 
