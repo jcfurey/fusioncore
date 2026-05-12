@@ -877,6 +877,8 @@ public:
     sensors_received_.clear();
     sensor_wait_done_ = false;
     activate_time_ = -1.0;
+    encoder_frame_checked_  = false;
+    encoder2_frame_checked_ = false;
     odom_pub_.reset();
     pose_pub_.reset();
     diag_pub_.reset();
@@ -1027,6 +1029,31 @@ private:
     init_win_qw_ = init_win_qx_ = init_win_qy_ = init_win_qz_ = 0.0;
     init_win_orient_n_ = 0;
     imu_frame_resolved_.clear();
+  }
+
+  // Helper: log a one-shot WARN if the publisher's child_frame_id contradicts
+  // base_frame_. nav_msgs/Odometry says twist is in child_frame_id, but every
+  // *_callback that consumes twist (encoder, encoder2, gnss_vel post-rotation,
+  // radar_vel) does so as if it were already in base_frame_. An empty
+  // child_frame_id is treated as "unspecified, trust the user" and is silent.
+  void warn_on_twist_frame_mismatch(
+      const char* tag,
+      const nav_msgs::msg::Odometry::SharedPtr& msg,
+      bool& checked_flag)
+  {
+    if (checked_flag) return;
+    checked_flag = true;
+    const std::string& cf = msg->child_frame_id;
+    if (!cf.empty() && cf != base_frame_) {
+      RCLCPP_WARN(get_logger(),
+        "%s odometry has child_frame_id='%s' but the fusion path treats "
+        "twist as already in '%s'. If '%s' is rotated relative to '%s' the "
+        "fused velocity will be wrong; either republish twist in '%s' or "
+        "set base_frame: '%s' to match.",
+        tag, cf.c_str(), base_frame_.c_str(),
+        cf.c_str(), base_frame_.c_str(),
+        base_frame_.c_str(), cf.c_str());
+    }
   }
 
   // Helper: format a set of sensor names as "A, B, C" for log messages.
@@ -1463,6 +1490,11 @@ private:
         "Encoder odometry has non-finite twist; dropped.");
       return;
     }
+    // The fusion path consumes msg->twist as if it were already in
+    // base_frame_; nav_msgs/Odometry semantics put twist in child_frame_id.
+    // Warn once if the publisher disagrees so the rotation goes from "looks
+    // wrong" to "explicitly logged once at startup".
+    warn_on_twist_frame_mismatch("Encoder", msg, encoder_frame_checked_);
     mark_sensor_received("Encoder");
     // If collecting the bias window, abort it if the robot moves.
     if (init_window_collecting_) {
@@ -1526,6 +1558,7 @@ private:
         "Encoder2 odometry has non-finite twist; dropped.");
       return;
     }
+    warn_on_twist_frame_mismatch("Encoder2", msg, encoder2_frame_checked_);
     mark_sensor_received("Encoder2");
     if (!fc_->is_initialized()) return;
 
@@ -2402,6 +2435,9 @@ private:
   std::string imu2_topic_;
   std::string imu2_frame_override_;
   bool        imu2_remove_gravity_ = false;
+  // One-shot child_frame_id mismatch flags for the twist consumers.
+  bool        encoder_frame_checked_  = false;
+  bool        encoder2_frame_checked_ = false;
   double      last_imu_time_       = 0.0;   // timestamp of most recent IMU message
   fusioncore::sensors::LLAPoint  gnss_ref_lla_;
   fusioncore::sensors::ECEFPoint gnss_ref_ecef_;
