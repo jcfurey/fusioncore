@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "fusioncore/fusioncore.hpp"
+#include "fusioncore/sensors/gnss.hpp"
 
 using namespace fusioncore;
 
@@ -202,6 +203,91 @@ TEST(FusionCoreTest, NineAxisIMUYawFusedNormally) {
 
   // Yaw must have converged toward 0.5
   EXPECT_GT(fc.get_state().yaw(), 0.3);
+}
+
+// ─── Test 9: GNSS coast mode triggers after N consecutive rejections ────────
+// Verifies the gnss_in_coast / gnss_consecutive_rejects fields added to
+// FusionCoreStatus (commit 9c55cfa). Drives the filter into a tight position
+// state, then feeds GPS fixes far enough away that the chi² gate rejects
+// every one. After config.gnss_coast_n consecutive rejects, coast mode must
+// activate and the counter must reflect the rejection streak.
+
+TEST(FusionCoreTest, GnssCoastModeActivatesAfterConsecutiveRejections) {
+  FusionCoreConfig config;
+  config.adaptive_imu  = false;
+  config.adaptive_gnss = false;
+  config.gnss_coast_n  = 3;  // make the test cheap
+
+  FusionCore fc(config);
+
+  // Tight initial uncertainty so a far-off fix has huge Mahalanobis distance.
+  State initial;
+  initial.P = StateMatrix::Identity() * 1e-4;
+  fc.init(initial, 0.0);
+
+  // Feed a few IMU samples so last_timestamp_ advances and the predict step
+  // doesn't blow up the position covariance back out to "any fix is fine".
+  for (int i = 1; i <= 5; ++i) {
+    fc.update_imu(i * 0.01, 0,0,0, 0,0,9.81);
+  }
+
+  // Build a fix that passes is_valid() but is wildly off in position.
+  // Default base_noise_xy = 1.0, so HDOP*base = 1m sigma; pos at (1000,0,0)
+  // is ~1000σ → d² ~= 1e6, well past outlier_threshold_gnss = 16.27.
+  sensors::GnssFix fix;
+  fix.x = 1000.0;
+  fix.y = 0.0;
+  fix.z = 0.0;
+  fix.hdop = 1.0;
+  fix.vdop = 1.0;
+  fix.satellites = 4;
+  fix.fix_type = sensors::GnssFixType::GPS_FIX;
+
+  // Send coast_n + 1 fixes; coast must engage by the coast_n-th rejection.
+  for (int i = 1; i <= config.gnss_coast_n + 1; ++i) {
+    fc.update_gnss(0.05 + i * 0.01, fix);
+  }
+
+  auto status = fc.get_status();
+  EXPECT_TRUE(status.gnss_in_coast);
+  EXPECT_GE(status.gnss_consecutive_rejects, config.gnss_coast_n);
+  EXPECT_GE(status.gnss_outliers, config.gnss_coast_n);
+
+  // A fix back near the predicted position must clear coast and reset the counter.
+  fix.x = 0.0;
+  fc.update_gnss(0.5, fix);
+  status = fc.get_status();
+  EXPECT_FALSE(status.gnss_in_coast);
+  EXPECT_EQ(status.gnss_consecutive_rejects, 0);
+}
+
+// ─── Test 10: Per-sensor age fields advance with last_timestamp_ ────────────
+// Verifies imu_age, encoder_age, gnss_age (commit 9c55cfa) report the gap
+// between the most recent measurement of each kind and the filter's clock.
+
+TEST(FusionCoreTest, PerSensorAgesReportTimeSinceLastMeasurement) {
+  FusionCore fc;
+  State initial;
+  initial.P = StateMatrix::Identity() * 0.1;
+  fc.init(initial, 0.0);
+
+  // Before any measurement: ages should be -1 (never received).
+  auto status = fc.get_status();
+  EXPECT_LT(status.imu_age,     0.0);
+  EXPECT_LT(status.encoder_age, 0.0);
+  EXPECT_LT(status.gnss_age,    0.0);
+
+  fc.update_imu(1.0, 0,0,0, 0,0,9.81);
+  fc.update_encoder(2.0, 0,0,0);
+
+  // Drive last_timestamp_ to 3.0 with another IMU update; then encoder is
+  // 1s old, IMU is 0s old.
+  fc.update_imu(3.0, 0,0,0, 0,0,9.81);
+
+  status = fc.get_status();
+  EXPECT_NEAR(status.imu_age,     0.0, 1e-9);
+  EXPECT_NEAR(status.encoder_age, 1.0, 1e-9);
+  EXPECT_LT(status.gnss_age, 0.0);  // GNSS still never received
 }
 
 int main(int argc, char** argv) {
