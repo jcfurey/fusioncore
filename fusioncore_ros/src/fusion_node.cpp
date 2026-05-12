@@ -22,6 +22,8 @@
 #include <diagnostic_msgs/msg/key_value.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include "fusioncore_ros/srv/from_ll.hpp"
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <mutex>
 #include <optional>
@@ -1239,9 +1241,29 @@ private:
     double roll, pitch, yaw;
     tf2::Matrix3x3(q_base).getRPY(roll, pitch, yaw);
 
-    fc_->update_imu_orientation(
-      t, roll, pitch, yaw,
-      msg->orientation_covariance.data());
+    // Rotate the orientation covariance into base_frame using the same
+    // imu_to_base. To first order in small angles, Σ_base ≈ R · Σ_imu · R^T —
+    // so a 90° yaw mount swaps the variance axes for roll and pitch as
+    // expected. update_imu_orientation only consumes the diagonal, but the
+    // diagonals of the rotated matrix mix in the off-diagonals of the source.
+    std::array<double, 9> cov_base;
+    if (imu_to_base.has_value()) {
+      tf2::Matrix3x3 R(imu_to_base.value());
+      tf2::Matrix3x3 Sigma_imu;
+      for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j)
+          Sigma_imu[i][j] = msg->orientation_covariance[i * 3 + j];
+      tf2::Matrix3x3 Sigma_base = R * Sigma_imu * R.transpose();
+      for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j)
+          cov_base[i * 3 + j] = Sigma_base[i][j];
+    } else {
+      std::copy(msg->orientation_covariance.begin(),
+                msg->orientation_covariance.end(),
+                cov_base.begin());
+    }
+
+    fc_->update_imu_orientation(t, roll, pitch, yaw, cov_base.data());
   }
 
   // ─── Encoder callback ─────────────────────────────────────────────────────
