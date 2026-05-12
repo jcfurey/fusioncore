@@ -1799,20 +1799,41 @@ private:
     odom.header.frame_id = odom_frame_;
     odom.child_frame_id  = base_frame_;
 
+    // force_2d: project the published pose onto SE(2). The internal UKF state
+    // stays full 6-DOF so toggling the flag is reversible without re-tuning;
+    // only the message and the broadcast TF are flattened. Roll, pitch, VZ,
+    // and angular X/Y are zeroed so a downstream 2D consumer (Nav2 costmap,
+    // AMCL relays) sees a fully-2D pose instead of a 3D pose with z=0 but
+    // residual roll/pitch leaking through the quaternion.
+    double pub_qx = s.x[fusioncore::QX];
+    double pub_qy = s.x[fusioncore::QY];
+    double pub_qz = s.x[fusioncore::QZ];
+    double pub_qw = s.x[fusioncore::QW];
+    if (force_2d_) {
+      // yaw-only quaternion: q_yaw = (cos(yaw/2), 0, 0, sin(yaw/2))
+      double roll, pitch, yaw;
+      tf2::Matrix3x3(tf2::Quaternion(pub_qx, pub_qy, pub_qz, pub_qw))
+        .getRPY(roll, pitch, yaw);
+      pub_qx = 0.0;
+      pub_qy = 0.0;
+      pub_qz = std::sin(yaw * 0.5);
+      pub_qw = std::cos(yaw * 0.5);
+    }
+
     odom.pose.pose.position.x = s.x[fusioncore::X];
     odom.pose.pose.position.y = s.x[fusioncore::Y];
     odom.pose.pose.position.z = force_2d_ ? 0.0 : s.x[fusioncore::Z];
 
-    odom.pose.pose.orientation.x = s.x[fusioncore::QX];
-    odom.pose.pose.orientation.y = s.x[fusioncore::QY];
-    odom.pose.pose.orientation.z = s.x[fusioncore::QZ];
-    odom.pose.pose.orientation.w = s.x[fusioncore::QW];
+    odom.pose.pose.orientation.x = pub_qx;
+    odom.pose.pose.orientation.y = pub_qy;
+    odom.pose.pose.orientation.z = pub_qz;
+    odom.pose.pose.orientation.w = pub_qw;
 
     odom.twist.twist.linear.x  = s.x[fusioncore::VX];
     odom.twist.twist.linear.y  = s.x[fusioncore::VY];
     odom.twist.twist.linear.z  = force_2d_ ? 0.0 : s.x[fusioncore::VZ];
-    odom.twist.twist.angular.x = s.x[fusioncore::WX];
-    odom.twist.twist.angular.y = s.x[fusioncore::WY];
+    odom.twist.twist.angular.x = force_2d_ ? 0.0 : s.x[fusioncore::WX];
+    odom.twist.twist.angular.y = force_2d_ ? 0.0 : s.x[fusioncore::WY];
     odom.twist.twist.angular.z = s.x[fusioncore::WZ];
 
     // Publish UKF covariance so Nav2 and other consumers see real uncertainty.
@@ -1857,10 +1878,10 @@ private:
     tf.transform.translation.x = s.x[fusioncore::X];
     tf.transform.translation.y = s.x[fusioncore::Y];
     tf.transform.translation.z = force_2d_ ? 0.0 : s.x[fusioncore::Z];
-    tf.transform.rotation.x = s.x[fusioncore::QX];
-    tf.transform.rotation.y = s.x[fusioncore::QY];
-    tf.transform.rotation.z = s.x[fusioncore::QZ];
-    tf.transform.rotation.w = s.x[fusioncore::QW];
+    tf.transform.rotation.x = pub_qx;
+    tf.transform.rotation.y = pub_qy;
+    tf.transform.rotation.z = pub_qz;
+    tf.transform.rotation.w = pub_qw;
 
     if (publish_tf_) tf_broadcaster_->sendTransform(tf);
   }
