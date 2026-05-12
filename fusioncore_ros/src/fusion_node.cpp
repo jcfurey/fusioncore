@@ -292,6 +292,7 @@ public:
     config.gnss.base_noise_xy  = get_parameter("gnss.base_noise_xy").as_double();
     config.gnss.base_noise_z   = get_parameter("gnss.base_noise_z").as_double();
     config.gnss.heading_noise  = get_parameter("gnss.heading_noise").as_double();
+    gnss_heading_noise_        = config.gnss.heading_noise;
     config.gnss.max_hdop       = get_parameter("gnss.max_hdop").as_double();
     int min_sats_param = get_parameter("gnss.min_satellites").as_int();
     if (min_sats_param > 4) {
@@ -1669,7 +1670,8 @@ private:
     // Extract heading accuracy from orientation covariance
     // covariance[8] is the yaw variance (3rd diagonal element)
     double yaw_variance = msg->orientation_covariance[8];
-    double yaw_sigma = (yaw_variance > 0.0) ? std::sqrt(yaw_variance) : 0.02;
+    double yaw_sigma = (yaw_variance > 0.0) ? std::sqrt(yaw_variance)
+                                             : gnss_heading_noise_;
 
     fusioncore::sensors::GnssHeading heading;
     heading.heading_rad  = yaw;
@@ -1725,7 +1727,8 @@ private:
     // Build heading struct
     fusioncore::sensors::GnssHeading heading;
     heading.heading_rad  = yaw_enu;
-    heading.accuracy_rad = (msg->variance > 0.0) ? std::sqrt(msg->variance) : 0.02;
+    heading.accuracy_rad = (msg->variance > 0.0) ? std::sqrt(msg->variance)
+                                                  : gnss_heading_noise_;
     heading.valid        = true;
 
     // Note magnetic vs geographic north
@@ -2069,6 +2072,7 @@ private:
   std::string encoder2_topic_;
   double      enc2_vel_noise_ = 0.05;
   double      enc2_yaw_noise_ = 0.02;
+  double      gnss_heading_noise_ = 0.02;  // mirror of config.gnss.heading_noise
   std::string gnss_vel_topic_;
   std::string radar_vel_topic_;
   double      radar_vel_noise_ = 0.1;
