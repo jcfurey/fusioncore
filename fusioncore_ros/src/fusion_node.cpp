@@ -595,6 +595,7 @@ public:
         if (last_imu_time_ <= 0.0) {
           pending_init_ = true;
           gnss_ref_set_ = false;
+          reset_bias_window_state();
           response->success = true;
           response->message =
             "FusionCore reset deferred: no IMU yet, will lazy-init on first IMU.";
@@ -610,6 +611,7 @@ public:
         initial.P(2,2) = 1000.0;
         fc_->init(initial, last_imu_time_);
         gnss_ref_set_ = false;  // re-anchor GPS reference on next fix
+        reset_bias_window_state();
         response->success = true;
         response->message = "FusionCore filter reset. GPS reference cleared.";
         RCLCPP_INFO(get_logger(), "Filter reset via ~/reset service.");
@@ -772,6 +774,7 @@ public:
     odom_pub_.reset();
     pose_pub_.reset();
     diag_pub_.reset();
+    reset_bias_window_state();
     deinit_proj();
     RCLCPP_INFO(get_logger(), "FusionCore deactivated.");
     return CallbackReturn::SUCCESS;
@@ -888,6 +891,24 @@ private:
   template <typename... Args>
   static bool all_finite(Args... vals) {
     return (... && std::isfinite(vals));
+  }
+
+  // Helper: zero the static-bias-window accumulators and frame cache so a
+  // subsequent re-init starts from a clean slate. Called from on_deactivate
+  // and the ~/reset service. Lazy-init paths in imu_callback also clear the
+  // collecting flag once the window completes; this helper covers the cases
+  // where the filter is torn down mid-window.
+  void reset_bias_window_state() {
+    init_window_collecting_       = false;
+    init_window_aborted_          = false;
+    init_window_start_is_msg_time_ = false;
+    init_window_start_            = 0.0;
+    init_win_n_                   = 0;
+    init_win_wx_ = init_win_wy_ = init_win_wz_ = 0.0;
+    init_win_ax_ = init_win_ay_ = init_win_az_ = 0.0;
+    init_win_qw_ = init_win_qx_ = init_win_qy_ = init_win_qz_ = 0.0;
+    init_win_orient_n_ = 0;
+    imu_frame_resolved_.clear();
   }
 
   // Helper: format a set of sensor names as "A, B, C" for log messages.
