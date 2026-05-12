@@ -69,6 +69,10 @@ public:
     // publish /fusion/odom; only the TF broadcast is suppressed.
     declare_parameter("publish.tf", true);
 
+    // Topic for the primary IMU. Override here instead of using ROS 2 remaps
+    // when wiring fusioncore from a parent launch file: keeps the source of
+    // truth in YAML alongside the rest of the IMU configuration.
+    declare_parameter("imu.topic",        std::string("/imu/data"));
     declare_parameter("imu.gyro_noise",  0.005);
     // Set to true if IMU has a magnetometer (9-axis: BNO08x, VectorNav, Xsens)
     // Set to false for 6-axis IMUs: yaw from gyro integration drifts
@@ -96,6 +100,8 @@ public:
     declare_parameter("imu2.frame_id", std::string(""));
     declare_parameter("imu2.remove_gravitational_acceleration", false);
 
+    // Topic for the primary wheel-encoder odometry source.
+    declare_parameter("encoder.topic",     std::string("/odom/wheels"));
     declare_parameter("encoder.vel_noise", 0.05);
     declare_parameter("encoder.yaw_noise", 0.02);
 
@@ -125,6 +131,8 @@ public:
     declare_parameter("radar.velocity_topic", std::string(""));
     declare_parameter("radar.vel_noise",      0.1);   // m/s fallback when msg cov <= 0
 
+    // Topic for the primary GNSS receiver (NavSatFix).
+    declare_parameter("gnss.fix_topic",      std::string("/gnss/fix"));
     declare_parameter("gnss.base_noise_xy",  1.0);
     declare_parameter("gnss.base_noise_z",   2.0);
     declare_parameter("gnss.heading_noise",  0.02);
@@ -239,6 +247,7 @@ public:
     force_2d_     = get_parameter("publish.force_2d").as_bool();
     publish_tf_   = get_parameter("publish.tf").as_bool();
     heading_topic_ = get_parameter("gnss.heading_topic").as_string();
+    gnss_topic_     = get_parameter("gnss.fix_topic").as_string();
     gnss2_topic_    = get_parameter("gnss.fix2_topic").as_string();
     azimuth_topic_  = get_parameter("gnss.azimuth_topic").as_string();
 
@@ -253,6 +262,7 @@ public:
     config.imu.accel_noise_z = config.imu.accel_noise_x;
     imu_remove_gravity_ = get_parameter("imu.remove_gravitational_acceleration").as_bool();
     imu_frame_override_ = get_parameter("imu.frame_id").as_string();
+    imu_topic_          = get_parameter("imu.topic").as_string();
     RCLCPP_INFO(get_logger(), "IMU gravity removal: %s",
       imu_remove_gravity_ ? "ENABLED" : "disabled");
     if (!imu_frame_override_.empty())
@@ -265,6 +275,7 @@ public:
     config.encoder.vel_noise_x  = get_parameter("encoder.vel_noise").as_double();
     config.encoder.vel_noise_y  = config.encoder.vel_noise_x;
     config.encoder.vel_noise_wz = get_parameter("encoder.yaw_noise").as_double();
+    encoder_topic_              = get_parameter("encoder.topic").as_string();
 
     encoder2_topic_     = get_parameter("encoder2.topic").as_string();
     enc2_vel_noise_     = get_parameter("encoder2.vel_noise").as_double();
@@ -431,7 +442,7 @@ public:
     auto encoder_qos = rclcpp::QoS(rclcpp::KeepLast(50));  // RELIABLE (default)
 
     imu_sub_ = create_subscription<sensor_msgs::msg::Imu>(
-      "/imu/data", sensor_qos,
+      imu_topic_, sensor_qos,
       [this](const sensor_msgs::msg::Imu::SharedPtr msg) {
         std::lock_guard<std::mutex> lock(fc_mutex_);
         imu_callback(msg);
@@ -449,7 +460,7 @@ public:
     }
 
     encoder_sub_ = create_subscription<nav_msgs::msg::Odometry>(
-      "/odom/wheels", encoder_qos,
+      encoder_topic_, encoder_qos,
       [this](const nav_msgs::msg::Odometry::SharedPtr msg) {
         std::lock_guard<std::mutex> lock(fc_mutex_);
         encoder_callback(msg);
@@ -492,7 +503,7 @@ public:
     }
 
     gnss_sub_ = create_subscription<sensor_msgs::msg::NavSatFix>(
-      "/gnss/fix", gnss_qos,
+      gnss_topic_, gnss_qos,
       [this](const sensor_msgs::msg::NavSatFix::SharedPtr msg) {
         std::lock_guard<std::mutex> lock(fc_mutex_);
         gnss_callback(msg, 0);
@@ -2036,6 +2047,9 @@ private:
   double      publish_rate_;
   bool        force_2d_    = false;
   bool        publish_tf_  = true;
+  std::string imu_topic_;
+  std::string encoder_topic_;
+  std::string gnss_topic_;
   std::string heading_topic_;
   std::string gnss2_topic_;
   std::string azimuth_topic_;
