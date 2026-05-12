@@ -713,19 +713,76 @@ public:
         }
         fusioncore::State restored;
         double t = 0.0;
+        bool saw_t = false, saw_x = false, saw_P = false;
         std::string line;
-        while (std::getline(f, line)) {
-          if (line.substr(0, 2) == "t=") {
-            t = std::stod(line.substr(2));
-          } else if (line.substr(0, 2) == "x=") {
-            std::istringstream ss(line.substr(2));
-            for (int i = 0; i < fusioncore::STATE_DIM; ++i) ss >> restored.x[i];
-          } else if (line.substr(0, 2) == "P=") {
-            std::istringstream ss(line.substr(2));
-            for (int r = 0; r < fusioncore::STATE_DIM; ++r)
-              for (int c = 0; c < fusioncore::STATE_DIM; ++c)
-                ss >> restored.P(r, c);
+        try {
+          while (std::getline(f, line)) {
+            if (line.size() < 2) continue;  // empty / single-char lines
+            const std::string prefix = line.substr(0, 2);
+            const std::string body   = line.substr(2);
+            if (prefix == "t=") {
+              t = std::stod(body);
+              saw_t = true;
+            } else if (prefix == "x=") {
+              std::istringstream ss(body);
+              for (int i = 0; i < fusioncore::STATE_DIM; ++i) {
+                if (!(ss >> restored.x[i])) {
+                  throw std::runtime_error(
+                    "x= block had fewer than " +
+                    std::to_string(fusioncore::STATE_DIM) + " values");
+                }
+              }
+              saw_x = true;
+            } else if (prefix == "P=") {
+              std::istringstream ss(body);
+              for (int r = 0; r < fusioncore::STATE_DIM; ++r)
+                for (int c = 0; c < fusioncore::STATE_DIM; ++c)
+                  if (!(ss >> restored.P(r, c))) {
+                    throw std::runtime_error(
+                      "P= block had fewer than " +
+                      std::to_string(fusioncore::STATE_DIM * fusioncore::STATE_DIM) +
+                      " values");
+                  }
+              saw_P = true;
+            }
           }
+        } catch (const std::exception& e) {
+          response->success = false;
+          response->message =
+            std::string("Parse error in checkpoint: ") + e.what();
+          RCLCPP_ERROR(get_logger(), "%s", response->message.c_str());
+          return;
+        }
+        if (!(saw_t && saw_x && saw_P)) {
+          response->success = false;
+          response->message = "Checkpoint missing required block(s): " +
+            std::string(saw_t ? "" : "[t=]") +
+            std::string(saw_x ? "" : "[x=]") +
+            std::string(saw_P ? "" : "[P=]");
+          RCLCPP_ERROR(get_logger(), "%s", response->message.c_str());
+          return;
+        }
+        // Sanity-check P: diagonal must be positive, matrix must be near-symmetric.
+        // Asymmetry > 1e-6 absolute on any element indicates corruption; the
+        // saved-and-loaded matrix should round-trip exactly.
+        for (int i = 0; i < fusioncore::STATE_DIM; ++i) {
+          if (!(restored.P(i, i) > 0.0)) {
+            response->success = false;
+            response->message =
+              "Checkpoint P has non-positive diagonal at index " + std::to_string(i);
+            RCLCPP_ERROR(get_logger(), "%s", response->message.c_str());
+            return;
+          }
+        }
+        const double asym =
+          (restored.P - restored.P.transpose()).cwiseAbs().maxCoeff();
+        if (asym > 1e-6) {
+          response->success = false;
+          response->message =
+            "Checkpoint P is not symmetric (max |P-Pᵀ| = " +
+            std::to_string(asym) + ")";
+          RCLCPP_ERROR(get_logger(), "%s", response->message.c_str());
+          return;
         }
         fc_->init(restored, t);
         response->success = true;
