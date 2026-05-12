@@ -22,6 +22,7 @@
 #include <diagnostic_msgs/msg/key_value.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include "fusioncore_ros/srv/from_ll.hpp"
+#include <cmath>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -837,6 +838,15 @@ private:
       sensors_received_.insert(name);
   }
 
+  // True when every value is finite (no NaN, no +/-Inf, no subnormal blow-up).
+  // A single non-finite measurement that reaches the UKF poisons P forever:
+  // ldlt() spreads NaN across every state component on the first update, and
+  // every downstream consumer (TF, Nav2 costmap) inherits the corruption.
+  template <typename... Args>
+  static bool all_finite(Args... vals) {
+    return (... && std::isfinite(vals));
+  }
+
   // Helper: format a set of sensor names as "A, B, C" for log messages.
   static std::string format_sensor_set(const std::set<std::string>& s) {
     std::string out;
@@ -846,6 +856,14 @@ private:
 
   void imu_callback(const sensor_msgs::msg::Imu::SharedPtr msg)
   {
+    if (!all_finite(
+          msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z,
+          msg->linear_acceleration.x, msg->linear_acceleration.y, msg->linear_acceleration.z)) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+        "IMU message has non-finite gyro/accel; dropped.");
+      return;
+    }
+
     double t = rclcpp::Time(msg->header.stamp).seconds();
 
     // Lazy init: initialize the filter on the first IMU message using the
@@ -920,10 +938,13 @@ private:
         init_win_az_ += msg->linear_acceleration.z;
         ++init_win_n_;
 
-        // Accumulate orientation if available
+        // Accumulate orientation if available. The top-of-callback all_finite()
+        // guard covers gyro/accel; orientation is independent and could be NaN
+        // even when angular_velocity/linear_acceleration are valid.
         const auto& ocov = msg->orientation_covariance;
         bool has_orient = (ocov[0] > 0.0 || ocov[4] > 0.0 || ocov[8] > 0.0);
-        if (has_orient) {
+        if (has_orient && all_finite(msg->orientation.w, msg->orientation.x,
+                                     msg->orientation.y, msg->orientation.z)) {
           init_win_qw_ += msg->orientation.w;
           init_win_qx_ += msg->orientation.x;
           init_win_qy_ += msg->orientation.y;
@@ -1087,6 +1108,13 @@ private:
   // valid because they fuse independent noise realizations.
   void imu2_callback(const sensor_msgs::msg::Imu::SharedPtr msg)
   {
+    if (!all_finite(
+          msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z,
+          msg->linear_acceleration.x, msg->linear_acceleration.y, msg->linear_acceleration.z)) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+        "IMU2 message has non-finite gyro/accel; dropped.");
+      return;
+    }
     mark_sensor_received("IMU2");
     if (!fc_->is_initialized()) return;
 
@@ -1220,6 +1248,13 @@ private:
 
   void encoder_callback(const nav_msgs::msg::Odometry::SharedPtr msg)
   {
+    if (!all_finite(
+          msg->twist.twist.linear.x, msg->twist.twist.linear.y,
+          msg->twist.twist.angular.z)) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+        "Encoder odometry has non-finite twist; dropped.");
+      return;
+    }
     mark_sensor_received("Encoder");
     // If collecting the bias window, abort it if the robot moves.
     if (init_window_collecting_) {
@@ -1276,6 +1311,13 @@ private:
 
   void encoder2_callback(const nav_msgs::msg::Odometry::SharedPtr msg)
   {
+    if (!all_finite(
+          msg->twist.twist.linear.x, msg->twist.twist.linear.y,
+          msg->twist.twist.angular.z)) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+        "Encoder2 odometry has non-finite twist; dropped.");
+      return;
+    }
     mark_sensor_received("Encoder2");
     if (!fc_->is_initialized()) return;
 
@@ -1306,6 +1348,11 @@ private:
 
   void radar_vel_callback(const nav_msgs::msg::Odometry::SharedPtr msg)
   {
+    if (!all_finite(msg->twist.twist.linear.x, msg->twist.twist.linear.y)) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+        "Radar velocity has non-finite twist; dropped.");
+      return;
+    }
     mark_sensor_received("RadarVel");
     if (!fc_->is_initialized()) return;
 
@@ -1330,6 +1377,12 @@ private:
 
   void gnss_vel_callback(const nav_msgs::msg::Odometry::SharedPtr msg)
   {
+    if (!all_finite(
+          msg->twist.twist.linear.x, msg->twist.twist.linear.y, msg->twist.twist.linear.z)) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+        "GPS velocity has non-finite twist; dropped.");
+      return;
+    }
     mark_sensor_received("GPSVel");
     if (!fc_->is_initialized()) return;
 
@@ -1356,6 +1409,12 @@ private:
 
   void gnss_callback(const sensor_msgs::msg::NavSatFix::SharedPtr msg, int source_id = 0)
   {
+    if (!all_finite(msg->latitude, msg->longitude, msg->altitude)) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+        "GNSS%d fix has non-finite lat/lon/alt; dropped.",
+        source_id);
+      return;
+    }
     if (source_id == 0) mark_sensor_received("GNSS");
     else                mark_sensor_received("GNSS2");
     if (!fc_->is_initialized()) return;
@@ -1518,6 +1577,13 @@ private:
 
   void gnss_heading_callback(const sensor_msgs::msg::Imu::SharedPtr msg)
   {
+    if (!all_finite(
+          msg->orientation.x, msg->orientation.y,
+          msg->orientation.z, msg->orientation.w)) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+        "GNSS heading message has non-finite orientation; dropped.");
+      return;
+    }
     mark_sensor_received("Heading");
     if (!fc_->is_initialized()) return;
 
@@ -1578,6 +1644,11 @@ private:
 
   void azimuth_callback(const compass_msgs::msg::Azimuth::SharedPtr msg)
   {
+    if (!all_finite(msg->azimuth, msg->variance)) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+        "compass_msgs/Azimuth has non-finite azimuth/variance; dropped.");
+      return;
+    }
     mark_sensor_received("Heading");
     if (!fc_->is_initialized()) return;
 
