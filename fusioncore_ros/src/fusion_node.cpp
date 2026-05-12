@@ -783,7 +783,15 @@ public:
 
   CallbackReturn on_cleanup(const rclcpp_lifecycle::State &)
   {
-    fc_.reset();
+    // Hold fc_mutex_ briefly so any sensor callback already inside the
+    // critical section finishes before we destroy fc_. on_deactivate has
+    // already reset every subscription, so no new callbacks can arrive,
+    // but the executor may still be draining one that was scheduled before
+    // the reset took effect.
+    {
+      std::lock_guard<std::mutex> lock(fc_mutex_);
+      fc_.reset();
+    }
     tf_broadcaster_.reset();
     tf_listener_.reset();
     tf_buffer_.reset();
