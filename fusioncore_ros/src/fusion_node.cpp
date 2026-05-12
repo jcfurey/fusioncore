@@ -194,6 +194,10 @@ public:
     declare_parameter("outlier_threshold_imu",  15.09);
     declare_parameter("outlier_threshold_enc",  11.34);
     declare_parameter("outlier_threshold_hdg",  10.83);
+    // Distance the GPS track must cover (with motion-quality gates passed)
+    // before the filter declares heading observable from GPS_TRACK and the
+    // antenna lever arm becomes active. Default matches FusionCoreConfig.
+    declare_parameter("heading_observable_distance", 5.0);
     declare_parameter("gnss.coast_n",           5);
     declare_parameter("gnss.coast_q_factor",    20.0);
 
@@ -358,6 +362,9 @@ public:
     config.outlier_threshold_imu  = get_parameter("outlier_threshold_imu").as_double();
     config.outlier_threshold_enc  = get_parameter("outlier_threshold_enc").as_double();
     config.outlier_threshold_hdg  = get_parameter("outlier_threshold_hdg").as_double();
+    config.heading_observable_distance =
+      get_parameter("heading_observable_distance").as_double();
+    heading_observable_distance_ = config.heading_observable_distance;
     config.gnss_coast_n           = get_parameter("gnss.coast_n").as_int();
     config.gnss_coast_q_factor    = get_parameter("gnss.coast_q_factor").as_double();
 
@@ -1718,7 +1725,7 @@ private:
         "Heading not yet validated: lever arm inactive. "
         "Distance traveled: %.1fm (need %.1fm), or provide dual antenna / IMU orientation.",
         fc_status.distance_traveled,
-        5.0);
+        heading_observable_distance_);
     }
   }
 
@@ -2228,6 +2235,7 @@ private:
   double      enc2_vel_noise_ = 0.05;
   double      enc2_yaw_noise_ = 0.02;
   double      gnss_heading_noise_ = 0.02;  // mirror of config.gnss.heading_noise
+  double      heading_observable_distance_ = 5.0;  // mirror of config.heading_observable_distance
   std::string gnss_vel_topic_;
   std::string radar_vel_topic_;
   double      radar_vel_noise_ = 0.1;
