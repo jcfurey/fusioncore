@@ -586,6 +586,22 @@ public:
         std_srvs::srv::Trigger::Response::SharedPtr response)
       {
         std::lock_guard<std::mutex> lock(fc_mutex_);
+        // last_imu_time_ defaults to 0.0 and only gets a real value after the
+        // first IMU message. If reset arrives before any IMU, calling init at
+        // t=0 then fusing the first sim-time IMU at t=T causes a T-second
+        // dead prediction step that the lazy-init logic in on_activate()
+        // already exists to avoid. Re-arm pending_init_ instead so the next
+        // IMU drives a clean lazy init.
+        if (last_imu_time_ <= 0.0) {
+          pending_init_ = true;
+          gnss_ref_set_ = false;
+          response->success = true;
+          response->message =
+            "FusionCore reset deferred: no IMU yet, will lazy-init on first IMU.";
+          RCLCPP_INFO(get_logger(),
+            "Reset received before first IMU; re-armed lazy init.");
+          return;
+        }
         fusioncore::State initial;
         initial.x = fusioncore::StateVector::Zero();
         initial.P = fusioncore::StateMatrix::Identity() * 0.1;
