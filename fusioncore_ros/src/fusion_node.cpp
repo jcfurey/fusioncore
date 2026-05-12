@@ -137,6 +137,11 @@ public:
     declare_parameter("gnss.base_noise_z",   2.0);
     declare_parameter("gnss.heading_noise",  0.02);
     declare_parameter("gnss.max_hdop",       4.0);
+    // sensor_msgs/NavSatFix carries no satellite count, so the GNSS callback
+    // hardcodes fix.satellites = 4 (GnssFix::is_valid then needs >= 4 to pass).
+    // Any value strictly greater than 4 would reject every fix, so we clamp at
+    // read time and log a warning. Kept as a parameter to keep YAML configs
+    // backwards-compatible.
     declare_parameter("gnss.min_satellites", 4);
     // Minimum fix type for GNSS fusion: 1=GPS, 2=DGPS, 3=RTK_FLOAT, 4=RTK_FIXED
     // Note: NavSatFix status only goes up to 2 (GBAS) which maps to RTK_FIXED.
@@ -288,7 +293,15 @@ public:
     config.gnss.base_noise_z   = get_parameter("gnss.base_noise_z").as_double();
     config.gnss.heading_noise  = get_parameter("gnss.heading_noise").as_double();
     config.gnss.max_hdop       = get_parameter("gnss.max_hdop").as_double();
-    config.gnss.min_satellites = get_parameter("gnss.min_satellites").as_int();
+    int min_sats_param = get_parameter("gnss.min_satellites").as_int();
+    if (min_sats_param > 4) {
+      RCLCPP_WARN(get_logger(),
+        "gnss.min_satellites=%d would reject every fix because NavSatFix "
+        "carries no satellite count and the GNSS callback hardcodes 4. "
+        "Clamping to 4.", min_sats_param);
+      min_sats_param = 4;
+    }
+    config.gnss.min_satellites = min_sats_param;
     min_fix_type_ = static_cast<fusioncore::sensors::GnssFixType>(
         get_parameter("gnss.min_fix_type").as_int());
     config.gnss.min_fix_type = min_fix_type_;
