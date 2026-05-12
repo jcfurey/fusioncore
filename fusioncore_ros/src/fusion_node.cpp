@@ -825,7 +825,12 @@ public:
       if (!heading_topic_.empty() ||
           !azimuth_topic_.empty())         sensors_expected_.insert("Heading");
       if (!gnss2_topic_.empty())           sensors_expected_.insert("GNSS2");
-      activate_time_ = this->now().seconds();
+      // Defer the wait-window anchor to the first IMU callback. With
+      // use_sim_time=true and /clock not yet running, this->now() returns 0
+      // here; first IMU then arrives at sim time T and (T − 0) trivially
+      // exceeds sensor_wait_timeout_ on the first comparison, falsely
+      // declaring the wait timed out before any other sensor had a chance.
+      activate_time_ = -1.0;
       RCLCPP_INFO(get_logger(), "Waiting for %zu sensor(s) before starting filter.",
         sensors_expected_.size());
     }
@@ -861,6 +866,7 @@ public:
     sensors_expected_.clear();
     sensors_received_.clear();
     sensor_wait_done_ = false;
+    activate_time_ = -1.0;
     odom_pub_.reset();
     pose_pub_.reset();
     diag_pub_.reset();
@@ -1041,6 +1047,12 @@ private:
     if (pending_init_) {
       // Sensor wait gate: hold initialization until all expected sensors checked in.
       if (wait_for_all_sensors_ && !sensor_wait_done_) {
+        // Anchor the wait window on the first IMU we actually see. on_activate
+        // can't safely capture a clock-based start when use_sim_time=true and
+        // /clock has not yet ticked.
+        if (activate_time_ < 0.0) {
+          activate_time_ = this->now().seconds();
+        }
         if (sensors_received_ != sensors_expected_) {
           double elapsed = this->now().seconds() - activate_time_;
           if (elapsed < sensor_wait_timeout_) {
