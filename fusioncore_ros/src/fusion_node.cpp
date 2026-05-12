@@ -860,7 +860,6 @@ public:
     pose_pub_.reset();
     diag_pub_.reset();
     reset_bias_window_state();
-    deinit_proj();
     RCLCPP_INFO(get_logger(), "FusionCore deactivated.");
     return CallbackReturn::SUCCESS;
   }
@@ -879,6 +878,11 @@ public:
     tf_broadcaster_.reset();
     tf_listener_.reset();
     tf_buffer_.reset();
+    // PROJ is paired with on_configure (which init_proj() happens in), not
+    // with on_activate. Tearing it down here means a configure→activate→
+    // deactivate→activate cycle keeps PROJ alive and the GNSS path keeps
+    // working; only an explicit cleanup discards the transform.
+    deinit_proj();
     return CallbackReturn::SUCCESS;
   }
 
