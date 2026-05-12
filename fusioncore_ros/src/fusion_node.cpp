@@ -308,8 +308,18 @@ public:
       min_sats_param = 4;
     }
     config.gnss.min_satellites = min_sats_param;
-    min_fix_type_ = static_cast<fusioncore::sensors::GnssFixType>(
-        get_parameter("gnss.min_fix_type").as_int());
+    // Clamp to the GnssFixType enum's valid range (1..4) before casting.
+    // An out-of-range value would silently produce a garbage enum and either
+    // reject every fix (above RTK_FIXED) or pass NO_FIX as a real fix (below
+    // GPS_FIX); both are confusing failure modes to debug from a YAML typo.
+    int min_fix_param = get_parameter("gnss.min_fix_type").as_int();
+    if (min_fix_param < 1 || min_fix_param > 4) {
+      RCLCPP_WARN(get_logger(),
+        "gnss.min_fix_type=%d is out of range (1=GPS, 2=DGPS, 3=RTK_FLOAT, "
+        "4=RTK_FIXED); clamping to 1.", min_fix_param);
+      min_fix_param = std::clamp(min_fix_param, 1, 4);
+    }
+    min_fix_type_ = static_cast<fusioncore::sensors::GnssFixType>(min_fix_param);
     config.gnss.min_fix_type = min_fix_type_;
     RCLCPP_INFO(get_logger(),
                 "GNSS min_fix_type: %d (1=GPS, 2=DGPS, 3=RTK_FLOAT, 4=RTK_FIXED)",
