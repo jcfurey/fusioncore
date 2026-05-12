@@ -448,9 +448,16 @@ public:
 
   // ─── Lifecycle: Activate ───────────────────────────────────────────────────
 
-  CallbackReturn on_activate(const rclcpp_lifecycle::State &)
+  CallbackReturn on_activate(const rclcpp_lifecycle::State & state)
   {
     RCLCPP_INFO(get_logger(), "Activating FusionCore...");
+    // Activate every LifecyclePublisher created via this node. Without this
+    // call, /fusion/odom, /fusion/pose, and /diagnostics publish() turns into
+    // a silent no-op (LifecyclePublisher::publish() short-circuits on
+    // is_activated()==false and only logs a throttled WARN). TF still works
+    // because tf2_ros::TransformBroadcaster wraps a regular rclcpp::Publisher,
+    // not a LifecyclePublisher — that masked the bug until now.
+    LifecycleNode::on_activate(state);
     validate_transforms();
 
     // Do NOT initialize the filter here with now().seconds().
@@ -824,8 +831,12 @@ public:
 
   // ─── Lifecycle: Deactivate ─────────────────────────────────────────────────
 
-  CallbackReturn on_deactivate(const rclcpp_lifecycle::State &)
+  CallbackReturn on_deactivate(const rclcpp_lifecycle::State & state)
   {
+    // Deactivate managed publishers before tearing the rest down so any
+    // late-arriving publish() during the reset() chain below is a clean
+    // no-op rather than a publish on a disposed entity.
+    LifecycleNode::on_deactivate(state);
     imu_sub_.reset();
     imu2_sub_.reset();
     encoder_sub_.reset();
