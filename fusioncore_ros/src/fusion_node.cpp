@@ -616,6 +616,14 @@ public:
       [this]() { publish_diagnostics(); },
       publish_cb_group_);
 
+    // All services bind to sensor_cb_group_ rather than the default group.
+    // The MultiThreadedExecutor only has 2 threads (sensor + publish); a
+    // service in the default group would compete for whichever thread is
+    // free and could starve under load. Every service handler already
+    // acquires fc_mutex_, so co-locating with sensor callbacks (also
+    // mutually exclusive on that mutex) costs nothing and keeps service
+    // dispatch on a known thread.
+
     // Reset service: re-initializes the filter without restarting the node.
     // Useful after GPS jumps, teleportation in simulation, or catastrophic drift.
     reset_srv_ = create_service<std_srvs::srv::Trigger>(
@@ -654,7 +662,8 @@ public:
         response->success = true;
         response->message = "FusionCore filter reset. GPS reference cleared.";
         RCLCPP_INFO(get_logger(), "Filter reset via ~/reset service.");
-      });
+      },
+      rclcpp::ServicesQoS(), sensor_cb_group_);
 
     // fromLL service: converts GPS lat/lon/alt to map frame x/y/z.
     // Drop-in replacement for robot_localization's /fromLL service used by
@@ -692,7 +701,8 @@ public:
         response->map_point.x = enu[0];
         response->map_point.y = enu[1];
         response->map_point.z = enu[2];
-      });
+      },
+      rclcpp::ServicesQoS(), sensor_cb_group_);
 
     // Checkpoint services: save/load full filter state for deterministic replay.
     save_checkpoint_srv_ = create_service<std_srvs::srv::Trigger>(
@@ -726,7 +736,8 @@ public:
         response->message = "Saved to " + checkpoint_path_;
         RCLCPP_INFO(get_logger(), "State checkpoint saved to %s at t=%.3f",
           checkpoint_path_.c_str(), last_imu_time_);
-      });
+      },
+      rclcpp::ServicesQoS(), sensor_cb_group_);
 
     load_checkpoint_srv_ = create_service<std_srvs::srv::Trigger>(
       "~/load_checkpoint",
@@ -818,7 +829,8 @@ public:
         response->message = "Loaded from " + checkpoint_path_;
         RCLCPP_INFO(get_logger(), "State checkpoint loaded from %s at t=%.3f",
           checkpoint_path_.c_str(), t);
-      });
+      },
+      rclcpp::ServicesQoS(), sensor_cb_group_);
 
     // Sensor wait: populate the expected set based on configured sources.
     if (wait_for_all_sensors_) {
