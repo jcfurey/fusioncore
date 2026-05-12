@@ -42,14 +42,6 @@ add_executable(fusioncore_node
   src/fusion_node.cpp
 )
 
-target_include_directories(fusioncore_node PRIVATE
-  ${fusioncore_core_INCLUDE_DIRS}
-)
-
-target_link_directories(fusioncore_node PRIVATE
-  ${fusioncore_core_LIB_DEPENDS}
-)
-
 ament_target_dependencies(fusioncore_node
   rclcpp
   rclcpp_lifecycle
