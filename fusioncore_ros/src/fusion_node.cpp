@@ -404,6 +404,15 @@ public:
         config.motion_model = fusioncore::create_motion_model(
           motion_model_name, {{"wheelbase", wheelbase}});
         RCLCPP_INFO(get_logger(), "Motion model: %s", motion_model_name.c_str());
+        if (motion_model_name == "Ackermann" ||
+            motion_model_name == "AckermannDrive" ||
+            motion_model_name == "ackermann") {
+          RCLCPP_WARN(get_logger(),
+            "AckermannDrive is currently identical to DifferentialDrive: "
+            "wheelbase=%.3fm is captured but not consumed by predict(). "
+            "Steering kinematics are not yet implemented; expect the same "
+            "behavior as motion_model=DifferentialDrive.", wheelbase);
+        }
       } catch (const std::exception& e) {
         RCLCPP_ERROR(get_logger(), "%s", e.what());
         return CallbackReturn::FAILURE;
