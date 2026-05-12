@@ -2103,6 +2103,8 @@ private:
       RCLCPP_ERROR(get_logger(), "PROJ: failed to create transform %s → %s. "
         "Check that both CRS strings are valid PROJ identifiers.",
         input_gnss_crs_.c_str(), output_crs_.c_str());
+      proj_context_destroy(proj_ctx_);
+      proj_ctx_ = nullptr;
       return;
     }
 
@@ -2111,6 +2113,8 @@ private:
 
     if (!proj_) {
       RCLCPP_ERROR(get_logger(), "PROJ: failed to normalize transform axis order");
+      proj_context_destroy(proj_ctx_);
+      proj_ctx_ = nullptr;
       return;
     }
 
