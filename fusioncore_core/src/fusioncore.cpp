@@ -778,6 +778,15 @@ FusionCoreStatus FusionCore::get_status() const {
   status.enc_outliers  = enc_outliers_;
   status.hdg_outliers  = hdg_outliers_;
 
+  // Coast-mode visibility for diagnostics consumers.
+  status.gnss_in_coast            = gnss_in_coast_;
+  status.gnss_consecutive_rejects = gnss_consecutive_rejects_;
+
+  // Per-sensor ages relative to the filter's most recent step.
+  status.imu_age     = (last_imu_time_     >= 0.0) ? (last_timestamp_ - last_imu_time_)     : -1.0;
+  status.encoder_age = (last_encoder_time_ >= 0.0) ? (last_timestamp_ - last_encoder_time_) : -1.0;
+  status.gnss_age    = (last_gnss_time_    >= 0.0) ? (last_timestamp_ - last_gnss_time_)    : -1.0;
+
   return status;
 }
 

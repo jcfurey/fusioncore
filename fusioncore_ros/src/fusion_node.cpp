@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -1917,24 +1918,42 @@ private:
       return "Unknown";
     };
 
+    auto fmt_age = [](double age) -> std::string {
+      if (age < 0.0) return "never";
+      char buf[32];
+      std::snprintf(buf, sizeof(buf), "%.3f", age);
+      return std::string(buf);
+    };
+
     // IMU
     diag_array.status.push_back(make_status("IMU",
       health_to_level(status.imu_health),
       health_to_str(status.imu_health),
-      {{"outlier_count", std::to_string(status.imu_outliers)}}));
+      {{"outlier_count",          std::to_string(status.imu_outliers)},
+       {"seconds_since_last_msg", fmt_age(status.imu_age)}}));
 
     // Encoder
     diag_array.status.push_back(make_status("Encoder",
       health_to_level(status.encoder_health),
       health_to_str(status.encoder_health),
-      {{"outlier_count", std::to_string(status.enc_outliers)}}));
+      {{"outlier_count",          std::to_string(status.enc_outliers)},
+       {"seconds_since_last_msg", fmt_age(status.encoder_age)}}));
 
     // GNSS
+    uint8_t gnss_level = health_to_level(status.gnss_health);
+    std::string gnss_msg = health_to_str(status.gnss_health);
+    if (status.gnss_in_coast) {
+      gnss_level = std::max<uint8_t>(gnss_level,
+                                     diagnostic_msgs::msg::DiagnosticStatus::WARN);
+      gnss_msg   = "INERTIAL COAST: " + gnss_msg;
+    }
     diag_array.status.push_back(make_status("GNSS",
-      health_to_level(status.gnss_health),
-      health_to_str(status.gnss_health),
-      {{"outlier_count",     std::to_string(status.gnss_outliers)},
-       {"heading_outliers",  std::to_string(status.hdg_outliers)}}));
+      gnss_level, gnss_msg,
+      {{"outlier_count",          std::to_string(status.gnss_outliers)},
+       {"heading_outliers",       std::to_string(status.hdg_outliers)},
+       {"in_coast",               status.gnss_in_coast ? "true" : "false"},
+       {"consecutive_rejects",    std::to_string(status.gnss_consecutive_rejects)},
+       {"seconds_since_last_msg", fmt_age(status.gnss_age)}}));
 
     // Filter
     auto heading_src_str = [](fusioncore::HeadingSource src) -> std::string {

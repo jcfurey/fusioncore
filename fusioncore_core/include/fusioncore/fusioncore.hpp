@@ -124,6 +124,20 @@ struct FusionCoreStatus {
   int imu_outliers  = 0;
   int enc_outliers  = 0;
   int hdg_outliers  = 0;
+
+  // Inertial coast mode (entered after gnss_coast_n consecutive GPS
+  // rejections). When true, position process noise is inflated by
+  // gnss_coast_q_factor so P grows fast enough for the gate to relax
+  // when GPS recovers.
+  bool gnss_in_coast            = false;
+  int  gnss_consecutive_rejects = 0;
+
+  // Seconds since the last accepted measurement for each sensor, computed
+  // against last_timestamp_ (which advances on every predict step). Negative
+  // when the sensor has not yet reported. Useful for /diagnostics rate checks.
+  double imu_age     = -1.0;
+  double encoder_age = -1.0;
+  double gnss_age    = -1.0;
 };
 
 class FusionCore {
