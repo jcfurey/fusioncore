@@ -1847,7 +1847,7 @@ private:
     // Publish UKF covariance so Nav2 and other consumers see real uncertainty.
     // pose.covariance is 6x6 row-major for [x, y, z, roll, pitch, yaw].
     // twist.covariance is 6x6 row-major for [vx, vy, vz, wx, wy, wz].
-    // Extract the relevant 6x6 sub-blocks from the 21x21 P matrix.
+    // Extract the relevant 6x6 sub-blocks from the 22x22 P matrix.
     const fusioncore::StateMatrix& P = s.P;
     // Pose covariance: [x, y, z, roll, pitch, yaw] (ROS convention).
     // Map orientation slots to QX, QY, QZ (3 of 4 quaternion components).

@@ -140,9 +140,13 @@ TEST(FusionCoreTest, ResetClearsState) {
 }
 
 // ─── Test 7: 6-axis IMU: yaw blocked, roll/pitch still fused ────────────────
-// When imu_has_magnetometer=false, cedbossneo's fix sets R(2,2)=1e6 so the
-// Kalman gain for yaw is ~0. A wildly wrong yaw measurement must not move
-// the filter's heading. Roll and pitch must still converge normally.
+// When imu_has_magnetometer=false, update_imu_orientation calls a 2D
+// IMU_RP_DIM update path (sensors::imu_rp_measurement_function) that fuses
+// only roll and pitch — yaw is never presented to the UKF. A wildly wrong
+// yaw measurement therefore cannot move the filter's heading; roll and
+// pitch must still converge normally. (Earlier revisions implemented this
+// as a 3D update with R(yaw) inflated to 1e6, hence "blocked yaw" wording
+// elsewhere; the current implementation is cleaner.)
 
 TEST(FusionCoreTest, SixAxisIMUYawBlockedRollPitchFused) {
   FusionCoreConfig config;
@@ -161,8 +165,7 @@ TEST(FusionCoreTest, SixAxisIMUYawBlockedRollPitchFused) {
   fc.init(initial, 0.0);
 
   // Feed 200 orientation updates: correct roll=0, but yaw=π (wildly wrong).
-  // With R(2,2)=1e6 the Kalman gain for yaw ≈ P(yaw)/(P(yaw)+1e6) ≈ 1e-7,
-  // so the total yaw drift over 200 steps is < 0.001 rad.
+  // The 2D update never sees yaw, so the wildly wrong value has no effect.
   for (int i = 1; i <= 200; ++i) {
     fc.update_imu_orientation(i * 0.01, 0.0, 0.0, M_PI, nullptr);
   }
