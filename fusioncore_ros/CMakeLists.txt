@@ -74,16 +74,9 @@ target_link_libraries(fusioncore_node
   PROJ::proj
 )
 
-# Explicitly link the static library
-find_library(FUSIONCORE_CORE_LIB
-  NAMES fusioncore_core
-  HINTS ${fusioncore_core_DIR}/../../../lib
-)
-if(FUSIONCORE_CORE_LIB)
-  target_link_libraries(fusioncore_node ${FUSIONCORE_CORE_LIB})
-else()
-  message(FATAL_ERROR "Could not find libfusioncore_core.a")
-endif()
+# fusioncore_core links via ament_target_dependencies above; the imported
+# target is provided by ament_export_targets(... HAS_LIBRARY_TARGET) in
+# fusioncore_core/CMakeLists.txt.
 
 install(TARGETS fusioncore_node
   DESTINATION lib/${PROJECT_NAME}
