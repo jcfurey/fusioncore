@@ -1880,6 +1880,54 @@ private:
     }
   }
 
+  // ─── Quaternion → RPY covariance Jacobian ────────────────────────────────
+  // Computes J = ∂(roll, pitch, yaw)/∂(qw, qx, qy, qz) using the ZYX Euler
+  // convention (matches tf2::Matrix3x3::getRPY). Used to map the UKF's 4x4
+  // quaternion covariance into the 3x3 RPY block that ROS pose.covariance
+  // expects. Returns false near gimbal lock (|2(qw·qy − qz·qx)| ≈ 1) where
+  // yaw is not uniquely recoverable from the quaternion; callers fall back
+  // to a 4× small-angle scaling in that case.
+  static bool quat_to_rpy_jacobian(
+      double qw, double qx, double qy, double qz,
+      Eigen::Matrix<double, 3, 4>& J)
+  {
+    const double a = 2.0 * (qw * qx + qy * qz);
+    const double b = 1.0 - 2.0 * (qx * qx + qy * qy);
+    const double s = 2.0 * (qw * qy - qz * qx);
+    const double c = 2.0 * (qw * qz + qx * qy);
+    const double d = 1.0 - 2.0 * (qy * qy + qz * qz);
+
+    const double roll_denom     = a * a + b * b;
+    const double yaw_denom      = c * c + d * d;
+    const double pitch_radicand = 1.0 - s * s;
+
+    if (roll_denom < 1e-12 || yaw_denom < 1e-12 || pitch_radicand < 1e-12) {
+      return false;
+    }
+
+    const double pitch_denom = std::sqrt(pitch_radicand);
+
+    // ∂roll / ∂(qw, qx, qy, qz)
+    J(0, 0) = (2.0 * qx * b)                / roll_denom;
+    J(0, 1) = (2.0 * qw * b + 4.0 * a * qx) / roll_denom;
+    J(0, 2) = (2.0 * qz * b + 4.0 * a * qy) / roll_denom;
+    J(0, 3) = (2.0 * qy * b)                / roll_denom;
+
+    // ∂pitch / ∂(qw, qx, qy, qz)
+    J(1, 0) =  2.0 * qy / pitch_denom;
+    J(1, 1) = -2.0 * qz / pitch_denom;
+    J(1, 2) =  2.0 * qw / pitch_denom;
+    J(1, 3) = -2.0 * qx / pitch_denom;
+
+    // ∂yaw / ∂(qw, qx, qy, qz)
+    J(2, 0) = (2.0 * qz * d)                / yaw_denom;
+    J(2, 1) = (2.0 * qy * d)                / yaw_denom;
+    J(2, 2) = (2.0 * qx * d + 4.0 * c * qy) / yaw_denom;
+    J(2, 3) = (2.0 * qw * d + 4.0 * c * qz) / yaw_denom;
+
+    return true;
+  }
+
   // ─── Publish state ────────────────────────────────────────────────────────
 
   void publish_state()
@@ -1937,16 +1985,68 @@ private:
     // twist.covariance is 6x6 row-major for [vx, vy, vz, wx, wy, wz].
     // Extract the relevant 6x6 sub-blocks from the 22x22 P matrix.
     const fusioncore::StateMatrix& P = s.P;
-    // Pose covariance: [x, y, z, roll, pitch, yaw] (ROS convention).
-    // Map orientation slots to QX, QY, QZ (3 of 4 quaternion components).
-    // QW is omitted: it's constrained by unit norm and has near-zero variance.
-    static constexpr int pose_idx[6] = {
-      fusioncore::X, fusioncore::Y, fusioncore::Z,
-      fusioncore::QX, fusioncore::QY, fusioncore::QZ
+
+    // Position covariance: direct copy from the 3x3 X/Y/Z sub-block.
+    static constexpr int pos_idx[3] = {
+      fusioncore::X, fusioncore::Y, fusioncore::Z
     };
-    for (int i = 0; i < 6; ++i)
-      for (int j = 0; j < 6; ++j)
-        odom.pose.covariance[i * 6 + j] = P(pose_idx[i], pose_idx[j]);
+    for (int i = 0; i < 3; ++i)
+      for (int j = 0; j < 3; ++j)
+        odom.pose.covariance[i * 6 + j] = P(pos_idx[i], pos_idx[j]);
+
+    // Orientation covariance: ROS convention is variance of (roll, pitch,
+    // yaw), but the UKF state stores quaternion components. Naively copying
+    // var(QX), var(QY), var(QZ) into those slots is off by ~4× near identity
+    // and worse at non-trivial tilt — quaternion-component variance is not
+    // Euler-angle variance. Compute Σ_rpy = J · Σ_q · Jᵀ where Σ_q is the
+    // 4x4 quaternion sub-block and J = ∂(rpy)/∂q. Position×orientation
+    // cross-covariance is mapped the same way: Σ_xyz,rpy = Σ_xyz,q · Jᵀ.
+    static constexpr int q_idx[4] = {
+      fusioncore::QW, fusioncore::QX, fusioncore::QY, fusioncore::QZ
+    };
+    Eigen::Matrix<double, 3, 4> J;
+    const bool jacobian_ok = quat_to_rpy_jacobian(
+      s.x[fusioncore::QW], s.x[fusioncore::QX],
+      s.x[fusioncore::QY], s.x[fusioncore::QZ], J);
+
+    if (jacobian_ok) {
+      Eigen::Matrix4d sigma_q;
+      for (int i = 0; i < 4; ++i)
+        for (int j = 0; j < 4; ++j)
+          sigma_q(i, j) = P(q_idx[i], q_idx[j]);
+      const Eigen::Matrix3d sigma_rpy = J * sigma_q * J.transpose();
+
+      Eigen::Matrix<double, 3, 4> sigma_pos_q;
+      for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 4; ++j)
+          sigma_pos_q(i, j) = P(pos_idx[i], q_idx[j]);
+      const Eigen::Matrix3d sigma_pos_rpy = sigma_pos_q * J.transpose();
+
+      for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j) {
+          odom.pose.covariance[(i + 3) * 6 + (j + 3)] = sigma_rpy(i, j);
+          odom.pose.covariance[i * 6 + (j + 3)]       = sigma_pos_rpy(i, j);
+          odom.pose.covariance[(j + 3) * 6 + i]       = sigma_pos_rpy(i, j);
+        }
+    } else {
+      // Gimbal lock fallback: small-angle approximation σ²_rpy ≈ 4·σ²_q for
+      // the matching quaternion component (QX↔roll, QY↔pitch, QZ↔yaw). This
+      // overestimates uncertainty near the singularity but at least keeps the
+      // units in radians² instead of unit-quaternion², so downstream
+      // consumers don't silently underestimate orientation noise.
+      static constexpr int q_diag_idx[3] = {
+        fusioncore::QX, fusioncore::QY, fusioncore::QZ
+      };
+      for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j) {
+          odom.pose.covariance[(i + 3) * 6 + (j + 3)] =
+            4.0 * P(q_diag_idx[i], q_diag_idx[j]);
+          odom.pose.covariance[i * 6 + (j + 3)] =
+            2.0 * P(pos_idx[i], q_diag_idx[j]);
+          odom.pose.covariance[(j + 3) * 6 + i] =
+            2.0 * P(pos_idx[i], q_diag_idx[j]);
+        }
+    }
 
     // Twist state indices: VX=6,VY=7,VZ=8,WX=9,WY=10,WZ=11
     static constexpr int twist_idx[6] = {
