@@ -589,14 +589,19 @@ public:
     pose_pub_  = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>("/fusion/pose", 100);
     diag_pub_  = create_publisher<diagnostic_msgs::msg::DiagnosticArray>("/diagnostics", 10);
 
+    // Use create_timer (node clock) rather than create_wall_timer so that
+    // when use_sim_time=true the publish/diagnostics rate tracks /clock.
+    // With wall-time timers a paused or fast-forwarded bag would still drive
+    // these at real-world wall rate, decoupling the published stamps from
+    // sim time and starving downstream consumers during bag pause.
     auto period = std::chrono::duration<double>(1.0 / publish_rate_);
-    publish_timer_ = create_wall_timer(
+    publish_timer_ = create_timer(
       std::chrono::duration_cast<std::chrono::nanoseconds>(period),
       [this]() { publish_state(); },
       publish_cb_group_);
 
     // Diagnostics at 1 Hz: standard ROS convention
-    diag_timer_ = create_wall_timer(
+    diag_timer_ = create_timer(
       std::chrono::seconds(1),
       [this]() { publish_diagnostics(); },
       publish_cb_group_);
