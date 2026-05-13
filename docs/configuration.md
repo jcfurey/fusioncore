@@ -148,6 +148,12 @@ fusioncore:
     vslam.position_noise: 0.1   # m: fallback when message covariance is zero
     vslam.orientation_noise: 0.02  # rad: fallback when message covariance is zero
     vslam.frame_id: ""           # override VSLAM TF frame. Leave empty to use msg header.
+    vslam.reinit_n: 10           # consecutive gate rejections before re-anchoring map origin
+    # FusionCore tracks the offset between the VSLAM map frame and the filter's odom
+    # frame. When VSLAM reinitializes after tracking loss, its pose jumps to a new
+    # map origin. The chi-squared gate rejects these jumps. After vslam.reinit_n
+    # consecutive rejections, FusionCore assumes reinitialization occurred and
+    # re-anchors the map origin to the filter's current position, restoring fusion.
 
     # ── GPS coast mode (cascade rejection recovery) ───────────────────────────
     gnss.coast_n: 5              # consecutive rejections before entering coast mode

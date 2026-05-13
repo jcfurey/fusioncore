@@ -100,10 +100,24 @@ If your ORB-SLAM3 node publishes `geometry_msgs/PoseStamped` instead of `nav_msg
 
 ### Reinitialization handling
 
-ORB-SLAM3 can jump by meters on tracking loss and recovery. The outlier gate (chi2(6, 0.999) = 22.46) handles this automatically: a large jump produces a high Mahalanobis distance and is rejected. Tune `outlier_threshold_vslam` if:
+ORB-SLAM3 can jump by meters on tracking loss and recovery. Two mechanisms work together to handle this:
+
+**Chi-squared gate** (immediate): a large jump produces a high Mahalanobis distance and is rejected. The filter state is unaffected. `outlier_threshold_vslam` (default 22.46 = chi2(6, 0.999)) controls this threshold.
+
+**Map re-anchoring** (recovery): after `vslam.reinit_n` consecutive gate rejections (default 10, roughly 2 seconds at 5 Hz), FusionCore concludes that ORB-SLAM3 has reinitialized to a new map origin. It computes a new offset between the VSLAM map frame and the filter's odom frame using the filter's current position estimate, and resumes fusion from there. This is logged as a WARN:
+
+```
+[WARN] VSLAM: 10 consecutive rejections — reinitialization detected. Re-anchoring map origin.
+```
+
+Tune `outlier_threshold_vslam` if:
 
 - **Too many rejections during normal motion:** increase threshold (e.g. 30.0)
 - **Reinitializations are accepted as valid updates:** decrease threshold (e.g. 18.0)
+
+Tune `vslam.reinit_n` if:
+- **Re-anchor fires too eagerly during fast motion:** increase (e.g. 20)
+- **Recovery after tracking loss is too slow:** decrease (e.g. 5)
 
 ---
 

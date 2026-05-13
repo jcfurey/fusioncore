@@ -184,6 +184,7 @@ public:
     declare_parameter("vslam.position_noise",     0.1);
     declare_parameter("vslam.orientation_noise",  0.02);
     declare_parameter("vslam.frame_id",           std::string(""));
+    declare_parameter("vslam.reinit_n",           10);
 
     declare_parameter("gnss.coast_n",                    5);
     declare_parameter("gnss.coast_q_factor",             20.0);
@@ -344,6 +345,7 @@ public:
     vslam_frame_override_ = get_parameter("vslam.frame_id").as_string();
     config.vslam.position_noise    = get_parameter("vslam.position_noise").as_double();
     config.vslam.orientation_noise = get_parameter("vslam.orientation_noise").as_double();
+    vslam_reinit_n_       = get_parameter("vslam.reinit_n").as_int();
 
     config.gnss_coast_n                    = get_parameter("gnss.coast_n").as_int();
     config.gnss_coast_q_factor             = get_parameter("gnss.coast_q_factor").as_double();
@@ -731,6 +733,8 @@ public:
     encoder_sub_.reset();
     encoder2_sub_.reset();
     vslam_sub_.reset();
+    vslam_origin_set_          = false;
+    vslam_consecutive_rejects_ = 0;
     gnss_vel_sub_.reset();
     radar_vel_sub_.reset();
     gnss_sub_.reset();
@@ -1323,7 +1327,14 @@ private:
   // Covariance is extracted from pose.covariance (6x6 row-major):
   //   [0,7,14] = position variance (x,y,z), [21,28,35] = orientation variance (r,p,y).
   // Falls back to config noise when covariance is zero or negative.
-  // First accepted pose anchors the VSLAM local origin in the filter's frame.
+  //
+  // Frame alignment: VSLAM has its own map frame origin (always starts at 0,0,0).
+  // The filter's odom frame may have a different origin if the robot moved before
+  // VSLAM initialized, or if VSLAM reinitializes after tracking loss.
+  // We track a 3D offset (odom_origin - vslam_origin) and apply it to every
+  // VSLAM measurement so the filter sees poses in odom frame coordinates.
+  // After vslam_reinit_n_ consecutive gate rejections we re-anchor, which handles
+  // ORB-SLAM3 reinitializations that produce large discontinuous pose jumps.
 
   void vslam_callback(const nav_msgs::msg::Odometry::SharedPtr msg)
   {
@@ -1332,18 +1343,38 @@ private:
 
     double t = rclcpp::Time(msg->header.stamp).seconds();
 
+    // Raw pose in VSLAM map frame
     fusioncore::sensors::VslamPose pose;
-    pose.x = msg->pose.pose.position.x;
-    pose.y = msg->pose.pose.position.y;
-    pose.z = msg->pose.pose.position.z;
+    const double raw_x = msg->pose.pose.position.x;
+    const double raw_y = msg->pose.pose.position.y;
+    const double raw_z = msg->pose.pose.position.z;
 
     const auto& q = msg->pose.pose.orientation;
-    double qw = q.w, qx = q.x, qy = q.y, qz = q.z;
+    double raw_roll, raw_pitch, raw_yaw;
+    fusioncore::quat_to_euler(q.w, q.x, q.y, q.z, raw_roll, raw_pitch, raw_yaw);
 
-    // Apply frame override: if the message frame doesn't match the filter frame,
-    // the user sets vslam.frame_id and an external TF handles the transform.
-    // Here we just extract Euler from the quaternion as published.
-    fusioncore::quat_to_euler(qw, qx, qy, qz, pose.roll, pose.pitch, pose.yaw);
+    // Anchor VSLAM map origin to filter's current odom position on first call.
+    // With init.wait_for_all_sensors: true and a stationary startup, both frames
+    // start at (0,0,0) and the offset is zero. The anchor still handles the general
+    // case where VSLAM initializes after the robot has already moved.
+    if (!vslam_origin_set_) {
+      const auto& s = fc_->get_state();
+      vslam_offset_x_ = s.x[fusioncore::X] - raw_x;
+      vslam_offset_y_ = s.x[fusioncore::Y] - raw_y;
+      vslam_offset_z_ = s.x[fusioncore::Z] - raw_z;
+      vslam_origin_set_ = true;
+      RCLCPP_INFO(get_logger(),
+        "VSLAM: map origin anchored. offset=(%.3f, %.3f, %.3f)",
+        vslam_offset_x_, vslam_offset_y_, vslam_offset_z_);
+    }
+
+    // Apply offset: translate pose from VSLAM map frame into filter odom frame
+    pose.x = raw_x + vslam_offset_x_;
+    pose.y = raw_y + vslam_offset_y_;
+    pose.z = raw_z + vslam_offset_z_;
+    pose.roll  = raw_roll;
+    pose.pitch = raw_pitch;
+    pose.yaw   = raw_yaw;
 
     // Extract covariance from pose.covariance (6x6, row-major, [x,y,z,rx,ry,rz]).
     // Diagonal indices: x=0, y=7, z=14, roll=21, pitch=28, yaw=35.
@@ -1351,28 +1382,48 @@ private:
     constexpr double kMinVarPos    = 1e-4;
     constexpr double kMinVarOrient = 1e-6;
 
-    double var_x   = cov[0];
-    double var_y   = cov[7];
-    double var_z   = cov[14];
-    double var_r   = cov[21];
-    double var_p   = cov[28];
-    double var_yaw = cov[35];
+    const double var_x   = cov[0];
+    const double var_y   = cov[7];
+    const double var_z   = cov[14];
+    const double var_r   = cov[21];
+    const double var_p   = cov[28];
+    const double var_yaw = cov[35];
 
     if (var_x > 0.0 && var_y > 0.0 && var_z > 0.0) {
-      pose.has_position_cov     = true;
+      pose.has_position_cov  = true;
       pose.position_cov(0,0) = std::max(var_x, kMinVarPos);
       pose.position_cov(1,1) = std::max(var_y, kMinVarPos);
       pose.position_cov(2,2) = std::max(var_z, kMinVarPos);
     }
 
     if (var_r > 0.0 && var_p > 0.0 && var_yaw > 0.0) {
-      pose.has_orientation_cov     = true;
+      pose.has_orientation_cov  = true;
       pose.orientation_cov(0,0) = std::max(var_r,   kMinVarOrient);
       pose.orientation_cov(1,1) = std::max(var_p,   kMinVarOrient);
       pose.orientation_cov(2,2) = std::max(var_yaw, kMinVarOrient);
     }
 
-    fc_->update_pose(t, pose);
+    const bool accepted = fc_->update_pose(t, pose);
+
+    if (accepted) {
+      vslam_consecutive_rejects_ = 0;
+    } else {
+      ++vslam_consecutive_rejects_;
+      // After vslam_reinit_n_ consecutive gate rejections, VSLAM has almost
+      // certainly reinitialized to a new map. Re-anchor to the filter's current
+      // position so subsequent measurements are accepted in the new map frame.
+      if (vslam_consecutive_rejects_ >= vslam_reinit_n_) {
+        const auto& s = fc_->get_state();
+        vslam_offset_x_ = s.x[fusioncore::X] - raw_x;
+        vslam_offset_y_ = s.x[fusioncore::Y] - raw_y;
+        vslam_offset_z_ = s.x[fusioncore::Z] - raw_z;
+        vslam_consecutive_rejects_ = 0;
+        RCLCPP_WARN(get_logger(),
+          "VSLAM: %d consecutive rejections — reinitialization detected. "
+          "Re-anchoring map origin. new offset=(%.3f, %.3f, %.3f)",
+          vslam_reinit_n_, vslam_offset_x_, vslam_offset_y_, vslam_offset_z_);
+      }
+    }
   }
 
   // ─── Radar Doppler velocity callback ─────────────────────────────────────
@@ -2038,6 +2089,14 @@ private:
   double      enc2_yaw_noise_ = 0.02;
   std::string vslam_topic_;
   std::string vslam_frame_override_;
+  // VSLAM map-to-odom frame offset: applied to every VSLAM measurement.
+  // Set on first measurement; re-computed on reinitialization detection.
+  bool   vslam_origin_set_         = false;
+  double vslam_offset_x_           = 0.0;
+  double vslam_offset_y_           = 0.0;
+  double vslam_offset_z_           = 0.0;
+  int    vslam_consecutive_rejects_ = 0;
+  int    vslam_reinit_n_           = 10;
   std::string gnss_vel_topic_;
   std::string radar_vel_topic_;
   double      radar_vel_noise_ = 0.1;

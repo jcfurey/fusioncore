@@ -39,6 +39,11 @@ fusioncore:
     vslam.topic: "/vslam/odometry"
     vslam.position_noise: 0.1     # m: fallback when message carries no covariance
     vslam.orientation_noise: 0.02 # rad: fallback when message carries no covariance
+    vslam.reinit_n: 10            # consecutive gate rejections before re-anchoring map origin
+    # After vslam.reinit_n consecutive chi-squared rejections, FusionCore assumes
+    # the VSLAM system reinitialised to a new map and re-anchors the map-to-odom
+    # offset to the filter's current position. Increase if normal motion produces
+    # short bursts of rejections; decrease if you want faster recovery.
 
     # ── No GPS, no wheel encoders ─────────────────────────────────────────────
     # FusionCore runs on IMU + VSLAM alone. No GPS topics needed.
