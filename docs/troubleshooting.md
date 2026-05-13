@@ -230,11 +230,28 @@ If all 36 values are zero, FusionCore falls back to `vslam.position_noise` and `
 ros2 topic echo /diagnostics --once
 ```
 
-If `vslam_outliers` is climbing, the Mahalanobis gate is rejecting measurements. Most likely cause: ORB-SLAM3 reinitialized and jumped by meters. Check `outlier_threshold_vslam` (default 22.46). Increase it if your system reinitializes frequently during normal operation.
+If `vslam_outliers` is climbing, the Mahalanobis gate is rejecting measurements.
+
+Two causes and two different fixes:
+
+- **Normal motion, normal tracking, still rejecting:** your covariance values are too tight relative to the actual VSLAM noise. Loosen `vslam.position_noise` / `vslam.orientation_noise` (used as fallback when covariance is zero), or calibrate the covariance your wrapper publishes.
+- **ORB-SLAM3 just lost tracking and reinitialized:** expected. The chi-squared gate correctly rejects the discontinuous pose jump. After `vslam.reinit_n` consecutive rejections (default 10 ≈ 2 s at 5 Hz), FusionCore automatically re-anchors to the filter's current position and resumes fusion. You will see this in the log:
+
+  ```
+  [WARN] VSLAM: 10 consecutive rejections — reinitialization detected. Re-anchoring map origin.
+  ```
+
+  If this fires too eagerly during fast motion, increase `vslam.reinit_n`. If recovery after tracking loss is too slow, decrease it.
+
+Do **not** raise `outlier_threshold_vslam` to suppress reinitialization rejections. That defeats the protection the gate provides and lets bad pose jumps corrupt the filter state.
 
 **Check 4: VSLAM health shows STALE**
 
 VSLAM is marked STALE when no message arrives for more than `stale_timeout` seconds (default 1 s). Check that ORB-SLAM3 is tracking: when tracking is lost, many forks stop publishing or publish with zero covariance.
+
+**Check 5: VSLAM fuses on startup then drifts away**
+
+The VSLAM map frame and filter odom frame have different origins. On first message, FusionCore anchors the offset between them (logged as `[INFO] VSLAM: map origin anchored`). If you don't see this log line, the first message arrived before the filter was initialized and was dropped. Use `init.wait_for_all_sensors: true` with `init.sensor_wait_timeout: 10.0` to ensure the filter waits for VSLAM before starting.
 
 ---
 
