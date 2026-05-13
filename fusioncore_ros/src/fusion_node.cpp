@@ -1,6 +1,7 @@
 #include "fusioncore/fusioncore.hpp"
 #include "fusioncore/motion_model.hpp"
 #include "fusioncore/sensors/gnss.hpp"
+#include "fusioncore/sensors/vslam.hpp"
 
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
@@ -175,8 +176,15 @@ public:
     declare_parameter("outlier_rejection",      true);
     declare_parameter("outlier_threshold_gnss", 16.27);
     declare_parameter("outlier_threshold_imu",  15.09);
-    declare_parameter("outlier_threshold_enc",  11.34);
-    declare_parameter("outlier_threshold_hdg",  10.83);
+    declare_parameter("outlier_threshold_enc",   11.34);
+    declare_parameter("outlier_threshold_hdg",   10.83);
+    declare_parameter("outlier_threshold_vslam", 22.46);
+    // VSLAM pose input (ORB-SLAM3, RTAB-Map, Kimera, etc.)
+    declare_parameter("vslam.topic",              std::string(""));
+    declare_parameter("vslam.position_noise",     0.1);
+    declare_parameter("vslam.orientation_noise",  0.02);
+    declare_parameter("vslam.frame_id",           std::string(""));
+
     declare_parameter("gnss.coast_n",                    5);
     declare_parameter("gnss.coast_q_factor",             20.0);
     declare_parameter("gnss.degraded_noise_multiplier",  3.0);
@@ -328,8 +336,15 @@ public:
     config.outlier_rejection      = get_parameter("outlier_rejection").as_bool();
     config.outlier_threshold_gnss = get_parameter("outlier_threshold_gnss").as_double();
     config.outlier_threshold_imu  = get_parameter("outlier_threshold_imu").as_double();
-    config.outlier_threshold_enc  = get_parameter("outlier_threshold_enc").as_double();
-    config.outlier_threshold_hdg  = get_parameter("outlier_threshold_hdg").as_double();
+    config.outlier_threshold_enc   = get_parameter("outlier_threshold_enc").as_double();
+    config.outlier_threshold_hdg   = get_parameter("outlier_threshold_hdg").as_double();
+    config.outlier_threshold_vslam = get_parameter("outlier_threshold_vslam").as_double();
+
+    vslam_topic_          = get_parameter("vslam.topic").as_string();
+    vslam_frame_override_ = get_parameter("vslam.frame_id").as_string();
+    config.vslam.position_noise    = get_parameter("vslam.position_noise").as_double();
+    config.vslam.orientation_noise = get_parameter("vslam.orientation_noise").as_double();
+
     config.gnss_coast_n                    = get_parameter("gnss.coast_n").as_int();
     config.gnss_coast_q_factor             = get_parameter("gnss.coast_q_factor").as_double();
     config.gnss_degraded_noise_multiplier  = get_parameter("gnss.degraded_noise_multiplier").as_double();
@@ -457,6 +472,17 @@ public:
         }, sensor_opts);
       RCLCPP_INFO(get_logger(),
         "Second encoder-twist source enabled on topic: %s", encoder2_topic_.c_str());
+    }
+
+    if (!vslam_topic_.empty()) {
+      vslam_sub_ = create_subscription<nav_msgs::msg::Odometry>(
+        vslam_topic_, 50,
+        [this](const nav_msgs::msg::Odometry::SharedPtr msg) {
+          std::lock_guard<std::mutex> lock(fc_mutex_);
+          vslam_callback(msg);
+        }, sensor_opts);
+      RCLCPP_INFO(get_logger(),
+        "VSLAM pose fusion enabled on topic: %s", vslam_topic_.c_str());
     }
 
     if (!gnss_vel_topic_.empty()) {
@@ -681,6 +707,7 @@ public:
       if (reference_use_first_fix_)        sensors_expected_.insert("GNSS");
       if (!imu2_topic_.empty())            sensors_expected_.insert("IMU2");
       if (!encoder2_topic_.empty())        sensors_expected_.insert("Encoder2");
+      if (!vslam_topic_.empty())           sensors_expected_.insert("VSLAM");
       if (!gnss_vel_topic_.empty())        sensors_expected_.insert("GPSVel");
       if (!radar_vel_topic_.empty())       sensors_expected_.insert("RadarVel");
       if (!heading_topic_.empty() ||
@@ -703,6 +730,7 @@ public:
     imu2_sub_.reset();
     encoder_sub_.reset();
     encoder2_sub_.reset();
+    vslam_sub_.reset();
     gnss_vel_sub_.reset();
     radar_vel_sub_.reset();
     gnss_sub_.reset();
@@ -1290,6 +1318,63 @@ private:
     fc_->update_encoder(t, vx, vy, wz, var_vx, var_vy, var_wz);
   }
 
+  // ─── VSLAM pose callback ──────────────────────────────────────────────────
+  // Accepts nav_msgs/Odometry. Uses pose component only; twist is ignored.
+  // Covariance is extracted from pose.covariance (6x6 row-major):
+  //   [0,7,14] = position variance (x,y,z), [21,28,35] = orientation variance (r,p,y).
+  // Falls back to config noise when covariance is zero or negative.
+  // First accepted pose anchors the VSLAM local origin in the filter's frame.
+
+  void vslam_callback(const nav_msgs::msg::Odometry::SharedPtr msg)
+  {
+    mark_sensor_received("VSLAM");
+    if (!fc_->is_initialized()) return;
+
+    double t = rclcpp::Time(msg->header.stamp).seconds();
+
+    fusioncore::sensors::VslamPose pose;
+    pose.x = msg->pose.pose.position.x;
+    pose.y = msg->pose.pose.position.y;
+    pose.z = msg->pose.pose.position.z;
+
+    const auto& q = msg->pose.pose.orientation;
+    double qw = q.w, qx = q.x, qy = q.y, qz = q.z;
+
+    // Apply frame override: if the message frame doesn't match the filter frame,
+    // the user sets vslam.frame_id and an external TF handles the transform.
+    // Here we just extract Euler from the quaternion as published.
+    fusioncore::quat_to_euler(qw, qx, qy, qz, pose.roll, pose.pitch, pose.yaw);
+
+    // Extract covariance from pose.covariance (6x6, row-major, [x,y,z,rx,ry,rz]).
+    // Diagonal indices: x=0, y=7, z=14, roll=21, pitch=28, yaw=35.
+    const auto& cov = msg->pose.covariance;
+    constexpr double kMinVarPos    = 1e-4;
+    constexpr double kMinVarOrient = 1e-6;
+
+    double var_x   = cov[0];
+    double var_y   = cov[7];
+    double var_z   = cov[14];
+    double var_r   = cov[21];
+    double var_p   = cov[28];
+    double var_yaw = cov[35];
+
+    if (var_x > 0.0 && var_y > 0.0 && var_z > 0.0) {
+      pose.has_position_cov     = true;
+      pose.position_cov(0,0) = std::max(var_x, kMinVarPos);
+      pose.position_cov(1,1) = std::max(var_y, kMinVarPos);
+      pose.position_cov(2,2) = std::max(var_z, kMinVarPos);
+    }
+
+    if (var_r > 0.0 && var_p > 0.0 && var_yaw > 0.0) {
+      pose.has_orientation_cov     = true;
+      pose.orientation_cov(0,0) = std::max(var_r,   kMinVarOrient);
+      pose.orientation_cov(1,1) = std::max(var_p,   kMinVarOrient);
+      pose.orientation_cov(2,2) = std::max(var_yaw, kMinVarOrient);
+    }
+
+    fc_->update_pose(t, pose);
+  }
+
   // ─── Radar Doppler velocity callback ─────────────────────────────────────
   // Fuses ego-velocity from a 4D imaging radar as an independent measurement.
   // Velocity is expected in robot body frame: linear.x=forward, linear.y=lateral.
@@ -1772,6 +1857,14 @@ private:
       {{"outlier_count",     std::to_string(status.gnss_outliers)},
        {"heading_outliers",  std::to_string(status.hdg_outliers)}}));
 
+    // VSLAM (only shown when configured)
+    if (!vslam_topic_.empty()) {
+      diag_array.status.push_back(make_status("VSLAM",
+        health_to_level(status.vslam_health),
+        health_to_str(status.vslam_health),
+        {{"outlier_count", std::to_string(status.vslam_outliers)}}));
+    }
+
     // Filter
     auto heading_src_str = [](fusioncore::HeadingSource src) -> std::string {
       switch (src) {
@@ -1919,6 +2012,7 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr          gnss_heading_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr        encoder_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr        encoder2_sub_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr        vslam_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr        gnss_vel_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr        radar_vel_sub_;
   rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr    gnss_sub_;
@@ -1942,6 +2036,8 @@ private:
   std::string encoder2_topic_;
   double      enc2_vel_noise_ = 0.05;
   double      enc2_yaw_noise_ = 0.02;
+  std::string vslam_topic_;
+  std::string vslam_frame_override_;
   std::string gnss_vel_topic_;
   std::string radar_vel_topic_;
   double      radar_vel_noise_ = 0.1;

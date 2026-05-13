@@ -41,6 +41,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(test_gnss_manager tests/test_gnss_manager.cpp)
   target_link_libraries(test_gnss_manager fusioncore_core Eigen3::Eigen)
+
+  ament_add_gtest(test_vslam tests/test_vslam.cpp)
+  target_link_libraries(test_vslam fusioncore_core Eigen3::Eigen)
 endif()
 
 ament_export_targets(fusioncore_core_targets HAS_LIBRARY_TARGET)

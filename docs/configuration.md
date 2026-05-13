@@ -132,8 +132,22 @@ fusioncore:
                                    # Lower to 13.82 (chi2(2, 0.999)) to maintain 99.9% confidence.
     outlier_threshold_enc:  11.34   # chi2(3, 0.999): 3D encoder
     outlier_threshold_hdg:  10.83   # chi2(1, 0.999): 1D heading
+    outlier_threshold_vslam: 22.46  # chi2(6, 0.999): 6D VSLAM pose
+    # Keep vslam gate at chi2(6, 0.999). ORB-SLAM3 can jump on reinitialization:
+    # this gate rejects those jumps automatically when covariance is calibrated.
     # Do NOT lower these below chi2 critical values. At 7.0 normal GPS noise
     # trips the gate and every fix gets rejected.
+
+    # ── VSLAM (visual SLAM pose input) ───────────────────────────────────────
+    # FusionCore accepts 6-DOF pose from any VSLAM system that publishes
+    # nav_msgs/Odometry (ORB-SLAM3, RTAB-Map, Kimera, OpenVINS, etc.).
+    # Only pose.pose and pose.covariance are used; twist is ignored.
+    # See docs/hardware/vslam-imu.md for setup details.
+    vslam.topic: ""              # e.g. "/vslam/odometry" or "/orbslam3/camera/odometry"
+                                 # Leave empty to disable VSLAM input.
+    vslam.position_noise: 0.1   # m: fallback when message covariance is zero
+    vslam.orientation_noise: 0.02  # rad: fallback when message covariance is zero
+    vslam.frame_id: ""           # override VSLAM TF frame. Leave empty to use msg header.
 
     # ── GPS coast mode (cascade rejection recovery) ───────────────────────────
     gnss.coast_n: 5              # consecutive rejections before entering coast mode

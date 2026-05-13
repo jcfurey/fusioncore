@@ -12,6 +12,7 @@ Pick the row that matches your sensors. Everything else follows from there.
 | IMU + wheel odom + GPS | Outdoor, field robots, GPS navigation | [`bno085_custom.yaml`](https://github.com/manankharwar/fusioncore/blob/main/fusioncore_ros/config/bno085_custom.yaml) or [`clearpath_husky.yaml`](https://github.com/manankharwar/fusioncore/blob/main/fusioncore_ros/config/clearpath_husky.yaml) |
 | IMU + VESC encoder + RealSense D435i, **Ackermann** | F1/10 scale car, indoor | [`f1tenth_indoor.yaml`](https://github.com/manankharwar/fusioncore/blob/main/fusioncore_ros/config/f1tenth_indoor.yaml) |
 | IMU + ZED 2i visual odom + GPS, **Ackermann** | Van or large vehicle, outdoor | [`van_outdoor_gps.yaml`](https://github.com/manankharwar/fusioncore/blob/main/fusioncore_ros/config/van_outdoor_gps.yaml) |
+| IMU + VSLAM (ORB-SLAM3, RTAB-Map, Kimera) | Indoor, GPS-denied, no wheel odom | [`vslam_imu.yaml`](https://github.com/manankharwar/fusioncore/blob/main/fusioncore_ros/config/vslam_imu.yaml) |
 
 **Variations within each setup: one-line changes, not separate configs:**
 
@@ -38,6 +39,7 @@ Pick the row that matches your sensors. Everything else follows from there.
 | [`duatic_mecanum.yaml`](https://github.com/manankharwar/fusioncore/blob/main/fusioncore_ros/config/duatic_mecanum.yaml) | IMU + wheels | Duatic mecanum platform | BNO085 | none |
 | [`f1tenth_indoor.yaml`](https://github.com/manankharwar/fusioncore/blob/main/fusioncore_ros/config/f1tenth_indoor.yaml) | IMU + VESC encoder, Ackermann | F1/10 scale car (indoor) | RealSense D435i | none |
 | [`van_outdoor_gps.yaml`](https://github.com/manankharwar/fusioncore/blob/main/fusioncore_ros/config/van_outdoor_gps.yaml) | IMU + visual odom + GPS, Ackermann | Full-size van / large vehicle | ZED 2i | any NavSatFix |
+| [`vslam_imu.yaml`](https://github.com/manankharwar/fusioncore/blob/main/fusioncore_ros/config/vslam_imu.yaml) | IMU + VSLAM pose | Any robot with visual SLAM, indoor GPS-denied | VectorNav / 9-axis | none |
 
 ---
 
@@ -63,6 +65,8 @@ ros2 launch fusioncore_ros fusioncore.launch.py \
 ## Indoor / GPS-denied robots
 
 See [Indoor / LiDAR ICP](icp-indoor.md) for detailed setup instructions: KISS-ICP, rtabmap, OAK-D IMU remaps, SLAM integration.
+
+See [VSLAM + IMU](vslam-imu.md) for ORB-SLAM3, RTAB-Map, Kimera, and other visual SLAM systems: covariance requirements, VectorNav setup, ORB-SLAM3 reinitialization handling.
 
 ---
 
