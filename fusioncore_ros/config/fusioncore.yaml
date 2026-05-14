@@ -17,6 +17,10 @@ fusioncore:
     # one should broadcast TF). FusionCore will still publish /fusion/odom.
     publish.tf: true
 
+    # Primary IMU topic. Override when your driver publishes at a non-default topic.
+    # Equivalent to a launch-time remap: -r /imu/data:=/your/imu/topic
+    # Common overrides: OAK-D: /imu   Realsense: /camera/imu   Clearpath: /sensors/imu_0/data
+    imu.topic: "/imu/data"
     imu.gyro_noise: 0.005
     # Set true if IMU has magnetometer (9-axis). False for 6-axis gyro/accel only.
     imu.has_magnetometer: false

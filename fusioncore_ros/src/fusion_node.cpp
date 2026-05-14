@@ -67,6 +67,10 @@ public:
     // publish /fusion/odom; only the TF broadcast is suppressed.
     declare_parameter("publish.tf", true);
 
+    // Primary IMU topic. Override when your driver publishes at a non-default topic
+    // (e.g. Clearpath Microstrain at /sensors/imu_0/data, Realsense at /camera/imu).
+    // Using a launch-time remap is equivalent and preferred for readability.
+    declare_parameter("imu.topic", std::string("/imu/data"));
     declare_parameter("imu.gyro_noise",  0.005);
     // Set to true if IMU has a magnetometer (9-axis: BNO08x, VectorNav, Xsens)
     // Set to false for 6-axis IMUs: yaw from gyro integration drifts
@@ -258,6 +262,7 @@ public:
     config.imu_has_magnetometer = get_parameter("imu.has_magnetometer").as_bool();
     config.imu.accel_noise_y = config.imu.accel_noise_x;
     config.imu.accel_noise_z = config.imu.accel_noise_x;
+    imu_topic_          = get_parameter("imu.topic").as_string();
     imu_remove_gravity_ = get_parameter("imu.remove_gravitational_acceleration").as_bool();
     imu_frame_override_ = get_parameter("imu.frame_id").as_string();
     RCLCPP_INFO(get_logger(), "IMU gravity removal: %s",
@@ -438,11 +443,12 @@ public:
     sensor_opts.callback_group = sensor_cb_group_;
 
     imu_sub_ = create_subscription<sensor_msgs::msg::Imu>(
-      "/imu/data", 100,
+      imu_topic_, 100,
       [this](const sensor_msgs::msg::Imu::SharedPtr msg) {
         std::lock_guard<std::mutex> lock(fc_mutex_);
         imu_callback(msg);
       }, sensor_opts);
+    RCLCPP_INFO(get_logger(), "IMU topic: %s", imu_topic_.c_str());
 
     if (!imu2_topic_.empty()) {
       imu2_sub_ = create_subscription<sensor_msgs::msg::Imu>(
@@ -2116,6 +2122,7 @@ private:
   int    init_win_orient_n_      = 0;
   bool        gnss_ref_set_        = false;
   bool        imu_remove_gravity_  = false;
+  std::string imu_topic_;
   std::string imu_frame_override_;
   std::string imu_frame_resolved_;
   std::string imu2_topic_;
