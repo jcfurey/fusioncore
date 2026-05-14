@@ -1,7 +1,7 @@
 # FusionCore
 
 [![CI](https://github.com/manankharwar/fusioncore/actions/workflows/ci.yml/badge.svg)](https://github.com/manankharwar/fusioncore/actions/workflows/ci.yml)
-[![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.19834991-blue)](https://doi.org/10.5281/zenodo.19834991)
+[![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.20091053-blue)](https://doi.org/10.5281/zenodo.20091053)
 [![Docs](https://img.shields.io/badge/docs-manankharwar.github.io%2Ffusioncore-blue)](https://manankharwar.github.io/fusioncore/)
 [![Paper](https://img.shields.io/badge/paper-arXiv%20preprint-b31b1b)](paper/fusioncore_arxiv.pdf)
 [![Newsletter](https://img.shields.io/badge/newsletter-subscribe-orange)](https://manankharwar.substack.com)
@@ -157,9 +157,9 @@ Apache 2.0.
   title     = {FusionCore: ROS 2 UKF Sensor Fusion},
   year      = {2026},
   publisher = {Zenodo},
-  version   = {0.2.0},
-  doi       = {10.5281/zenodo.19834991},
-  url       = {https://doi.org/10.5281/zenodo.19834991}
+  version   = {0.2.3},
+  doi       = {10.5281/zenodo.20091053},
+  url       = {https://doi.org/10.5281/zenodo.20091053}
 }
 ```
 
