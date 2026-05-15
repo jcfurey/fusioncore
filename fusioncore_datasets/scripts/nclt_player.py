@@ -98,6 +98,7 @@ class NCLTPlayer(Node):
         self.declare_parameter('data_dir', '')
         self.declare_parameter('playback_rate', 1.0)
         self.declare_parameter('duration_s', 0.0)
+        self.declare_parameter('start_offset_s', 0.0)
 
         # GPS spike injection
         self.declare_parameter('gps_spike_time_s', -1.0)
@@ -112,8 +113,9 @@ class NCLTPlayer(Node):
         if not data_dir:
             raise RuntimeError('nclt_player: data_dir parameter is required')
 
-        self._rate     = self.get_parameter('playback_rate').value
-        self._duration = self.get_parameter('duration_s').value
+        self._rate         = self.get_parameter('playback_rate').value
+        self._duration     = self.get_parameter('duration_s').value
+        self._start_offset = self.get_parameter('start_offset_s').value
 
         self._spike_time_s  = self.get_parameter('gps_spike_time_s').value
         self._spike_mag_m   = self.get_parameter('gps_spike_magnitude_m').value
@@ -308,10 +310,13 @@ class NCLTPlayer(Node):
         for utime, kind, data in self._events:
             sim_elapsed_s = (utime - sim_start_us) / 1e6
 
-            if self._duration > 0 and sim_elapsed_s > self._duration:
+            if sim_elapsed_s < self._start_offset:
+                continue
+
+            if self._duration > 0 and sim_elapsed_s > self._start_offset + self._duration:
                 break
 
-            sleep_s = wall_start + sim_elapsed_s / self._rate - time.monotonic()
+            sleep_s = wall_start + (sim_elapsed_s - self._start_offset) / self._rate - time.monotonic()
             if sleep_s > 0:
                 time.sleep(sleep_s)
 

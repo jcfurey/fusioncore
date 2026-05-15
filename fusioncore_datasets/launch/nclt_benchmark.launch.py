@@ -49,6 +49,7 @@ def generate_launch_description():
     output_bag   = LaunchConfiguration('output_bag')
     rate         = LaunchConfiguration('playback_rate')
     duration     = LaunchConfiguration('duration_s')
+    start_offset = LaunchConfiguration('start_offset_s')
     spike_time   = LaunchConfiguration('gps_spike_time_s')
     spike_mag    = LaunchConfiguration('gps_spike_magnitude_m')
     outage_start = LaunchConfiguration('gps_outage_start_s')
@@ -60,10 +61,12 @@ def generate_launch_description():
         DeclareLaunchArgument('data_dir',      description='Path to NCLT sequence directory'),
         DeclareLaunchArgument('output_bag',     default_value='./benchmarks/nclt/2012-01-08/bag',
                               description='Output bag path'),
-        DeclareLaunchArgument('playback_rate',  default_value='1.0',
+        DeclareLaunchArgument('playback_rate',   default_value='1.0',
                               description='Playback speed multiplier'),
-        DeclareLaunchArgument('duration_s',     default_value='0.0',
+        DeclareLaunchArgument('duration_s',      default_value='0.0',
                               description='Seconds of data to play (0 = all)'),
+        DeclareLaunchArgument('start_offset_s',  default_value='0.0',
+                              description='Sim-time seconds to skip at the start of the sequence'),
         DeclareLaunchArgument('gps_spike_time_s',      default_value='-1.0',
                               description='Sim-time seconds to inject GPS spike (-1 = off)'),
         DeclareLaunchArgument('gps_spike_magnitude_m', default_value='500.0',
@@ -86,6 +89,7 @@ def generate_launch_description():
             'data_dir':               data_dir,
             'playback_rate':          rate,
             'duration_s':             duration,
+            'start_offset_s':         start_offset,
             'use_sim_time':           True,
             'gps_spike_time_s':       spike_time,
             'gps_spike_magnitude_m':  spike_mag,

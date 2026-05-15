@@ -61,12 +61,23 @@ def compute_ate(gt: PoseTrajectory3D, est: PoseTrajectory3D) -> dict:
     metric = metrics.APE(metrics.PoseRelation.translation_part)
     metric.process_data((gt_s, est_aligned))
     errors = metric.error
+
+    # XY-only ATE: horizontal error independent of Z. This is the metric that
+    # actually matters for ground robot navigation (nav2, obstacle avoidance).
+    # 3D ATE is distorted by GPS altitude noise in FC vs forced-zero Z in RL-EKF.
+    gt_xy  = gt_s.positions_xyz[:, :2]
+    est_xy = est_aligned.positions_xyz[:, :2]
+    xy_errors = np.linalg.norm(gt_xy - est_xy, axis=1)
+
     return {
         'rmse':        float(np.sqrt(np.mean(errors**2))),
         'mean':        float(np.mean(errors)),
         'max':         float(np.max(errors)),
         'pct5':        float(np.mean(errors <= 5.0) * 100),
         'pct10':       float(np.mean(errors <= 10.0) * 100),
+        'xy_rmse':     float(np.sqrt(np.mean(xy_errors**2))),
+        'xy_pct5':     float(np.mean(xy_errors <= 5.0) * 100),
+        'xy_pct10':    float(np.mean(xy_errors <= 10.0) * 100),
         'errors':      errors,
         'gt_s':        gt_s,
         'est_aligned': est_aligned,
@@ -136,8 +147,10 @@ def evaluate_filter(label: str, gt: PoseTrajectory3D, est: PoseTrajectory3D) -> 
     dr    = drift_rate(ate['rmse'], ate['gt_s'])
 
     print(f'\n  [{label}]')
-    print(f'    ATE RMSE            {fmt(ate["rmse"])}')
+    print(f'    ATE RMSE (3D)       {fmt(ate["rmse"])}')
+    print(f'    ATE RMSE (XY only)  {fmt(ate["xy_rmse"])}')
     print(f'    Within 5 m          {ate["pct5"]:.1f}%  |  Within 10 m  {ate["pct10"]:.1f}%')
+    print(f'    XY within 5 m       {ate["xy_pct5"]:.1f}%  |  XY within 10 m  {ate["xy_pct10"]:.1f}%')
     print(f'    Path length ratio   {fmt(plr, "", 4)}  (1.0 = perfect scale)')
     print(f'    Drift rate          {fmt(dr, " m/km", 2)}')
     print(f'    RPE@10m             RMSE={fmt(rpe10["rmse"])}')
@@ -253,11 +266,11 @@ def write_markdown(filters, sequence: str, out_dir: str):
         f.write(f'# Benchmark Results: NCLT Sequence {sequence}\n\n')
 
         f.write('## Metrics (SE3-aligned to RTK ground truth)\n\n')
-        f.write('| Filter | ATE RMSE (m) | Within 5 m | Within 10 m | Path Length Ratio | Drift (m/km) | RPE@10m RMSE (m) |\n')
-        f.write('|--------|-------------|------------|-------------|-------------------|--------------|------------------|\n')
+        f.write('| Filter | ATE RMSE 3D (m) | ATE RMSE XY (m) | Within 5 m | Within 10 m | Path Length Ratio | Drift (m/km) | RPE@10m RMSE (m) |\n')
+        f.write('|--------|----------------|----------------|------------|-------------|-------------------|--------------|------------------|\n')
         for label, r, _ in filters:
             ate = r['ate']
-            f.write(f"| {label} | {ate['rmse']:.3f} | {ate['pct5']:.1f}% | {ate['pct10']:.1f}% | "
+            f.write(f"| {label} | {ate['rmse']:.3f} | {ate['xy_rmse']:.3f} | {ate['pct5']:.1f}% | {ate['pct10']:.1f}% | "
                     f"{r['plr']:.4f} | {r['drift']:.2f} | {r['rpe10']['rmse']:.3f} |\n")
 
         f.write('\n## Methodology\n\n')
@@ -327,17 +340,31 @@ def main():
         filters.append(('RL-UKF', rl_ukf_res, '#9467bd'))
 
     print_section('Summary')
-    fc_ate = fc_res['ate']['rmse']
+    fc_ate    = fc_res['ate']['rmse']
+    fc_ate_xy = fc_res['ate']['xy_rmse']
     for label, res, _ in filters[1:]:
-        other_ate = res['ate']['rmse']
+        other_ate    = res['ate']['rmse']
+        other_ate_xy = res['ate']['xy_rmse']
+
+        # 3D summary
         if fc_ate < other_ate:
             diff = (other_ate - fc_ate) / other_ate * 100
-            print(f'  FusionCore beats {label} by {diff:.1f}%  ({fc_ate:.3f}m vs {other_ate:.3f}m)')
+            print(f'  3D: FusionCore beats {label} by {diff:.1f}%  ({fc_ate:.3f}m vs {other_ate:.3f}m)')
         elif other_ate < fc_ate:
             diff = (fc_ate - other_ate) / fc_ate * 100
-            print(f'  {label} beats FusionCore by {diff:.1f}%  ({other_ate:.3f}m vs {fc_ate:.3f}m)')
+            print(f'  3D: {label} beats FusionCore by {diff:.1f}%  ({other_ate:.3f}m vs {fc_ate:.3f}m)')
         else:
-            print(f'  Tie vs {label}  ({fc_ate:.3f}m)')
+            print(f'  3D: Tie vs {label}  ({fc_ate:.3f}m)')
+
+        # XY summary (what actually matters for ground robot navigation)
+        if fc_ate_xy < other_ate_xy:
+            diff = (other_ate_xy - fc_ate_xy) / other_ate_xy * 100
+            print(f'  XY: FusionCore beats {label} by {diff:.1f}%  ({fc_ate_xy:.3f}m vs {other_ate_xy:.3f}m)')
+        elif other_ate_xy < fc_ate_xy:
+            diff = (fc_ate_xy - other_ate_xy) / fc_ate_xy * 100
+            print(f'  XY: {label} beats FusionCore by {diff:.1f}%  ({other_ate_xy:.3f}m vs {fc_ate_xy:.3f}m)')
+        else:
+            print(f'  XY: Tie vs {label}  ({fc_ate_xy:.3f}m)')
 
     print_section('Plots')
     save_trajectory_plot(gt, filters, args.out_dir)
