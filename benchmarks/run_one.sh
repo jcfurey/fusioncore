@@ -99,11 +99,14 @@ if [ $ELAPSED -ge $WALL_TIME ]; then
 fi
 
 kill $TAIL_PID 2>/dev/null || true
-wait $LAUNCH_PID 2>/dev/null || true
-
-sleep 3
+# Don't wait indefinitely — give it 10s then force-kill.
+for i in $(seq 1 10); do
+    kill -0 $LAUNCH_PID 2>/dev/null || break
+    sleep 1
+done
+kill -9 $LAUNCH_PID 2>/dev/null || true
 pkill -9 -f "fusioncore_node|nclt_player|ekf_node|navsat_transform_node|ros2 bag record|component_container" 2>/dev/null || true
-sleep 3
+sleep 5
 
 if [ ! -d "$BAG_DIR" ]; then
     echo "ERROR: bag not created for $SEQ"
