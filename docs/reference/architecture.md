@@ -71,7 +71,7 @@ The core library (`fusioncore_core`) has zero ROS dependency. It can be used in 
 - Mahalanobis outlier rejection
 - Adaptive noise covariance
 - GPS delay compensation: full IMU replay retrodiction up to 500 ms
-- Non-holonomic ground constraint (VZ=0)
+- Non-holonomic ground constraint (VZ=0, AZ=0, optional Z position for flat terrain)
 - Zero velocity updates (ZUPT)
 - Per-sensor diagnostics at 1 Hz
 - Filter reset service

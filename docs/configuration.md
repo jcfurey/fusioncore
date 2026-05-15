@@ -168,6 +168,20 @@ fusioncore:
     # Workflow: replay a bag to a known-good point → save → tweak params →
     #   load (instant, no re-replay) → observe the problem window.
 
+    # ── Ground constraint ─────────────────────────────────────────────────────
+    # FusionCore always fuses VZ=0 and AZ=0 on every encoder callback.
+    # These are unconditional for wheeled ground robots and cannot be disabled.
+    #
+    # The optional Z position constraint targets a different problem: GPS
+    # altitude noise (typically 3-5m std dev) causing the filter's Z position
+    # to oscillate on flat terrain. When enabled, it fuses Z=0 as a position
+    # pseudo-measurement tighter than GPS altitude noise, keeping the filter
+    # anchored to the ground.
+    #
+    # 0.0 = disabled (default, correct for 3D outdoor operation or unknown terrain)
+    # 0.3 = flat terrain mode: campus paths, parking lots, warehouse floors
+    ground_constraint.z_position_sigma: 0.0
+
     # ── ZUPT ──────────────────────────────────────────────────────────────────
     zupt.enabled: true
     zupt.velocity_threshold: 0.05   # m/s: encoder speed below this → stationary

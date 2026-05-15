@@ -239,7 +239,25 @@ FusionCore stores a ring buffer of 100 IMU messages (1 second at 100 Hz). When a
 
 ## Non-holonomic ground constraint
 
-For wheeled ground robots, FusionCore fuses a `VZ = 0` pseudo-measurement on every encoder update. This prevents vertical velocity from drifting due to IMU noise on a robot that cannot move vertically. Do not use for aerial vehicles.
+For wheeled ground robots, FusionCore fuses three pseudo-measurements on every encoder callback. Each one targets a different part of the state vector.
+
+**VZ = 0 (vertical velocity):** The robot cannot move vertically, so body-frame vertical velocity must be zero. This is the primary constraint. Noise sigma: 0.1 m/s.
+
+**AZ = 0 (vertical acceleration):** Without this, a small mismatch between the IMU's local gravity reading and the WGS84 constant (9.80665 m/s²) leaks into the AZ state. Because the UKF process noise on acceleration is large, AZ absorbs the residual. AZ then integrates into VZ via the motion model, so the VZ=0 constraint above cannot fully compensate on its own. Constraining AZ directly eliminates the source of the leak. Noise sigma: 0.5 m/s².
+
+**Z position = 0 (optional, flat-terrain mode):** On flat terrain with GPS, GPS altitude corrections carry significant noise (typically 3-5m standard deviation). This noise causes Z position to oscillate, which adds to 3D ATE even when the robot is actually on flat ground. When `ground_constraint.z_position_sigma` is set to a positive value (recommended: 0.3m for known-flat terrain), FusionCore fuses a Z = 0 pseudo-measurement tight enough to dominate GPS altitude noise and keep the filter grounded.
+
+On terrain with real elevation change, GPS issues hundreds of consistent corrections in the correct direction, which eventually overcome the position constraint. The constraint creates some resistance but does not prevent the filter from tracking real hills. Set `ground_constraint.z_position_sigma: 0.0` (the default) for any deployment where terrain elevation is unknown or variable.
+
+```yaml
+# Flat terrain (campus paths, parking lots, warehouse floors):
+ground_constraint.z_position_sigma: 0.3
+
+# General outdoor / hilly terrain (default):
+ground_constraint.z_position_sigma: 0.0
+```
+
+Do not call the ground constraint for aerial vehicles.
 
 ---
 
