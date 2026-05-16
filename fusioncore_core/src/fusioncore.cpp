@@ -122,6 +122,7 @@ void FusionCore::init(const State& initial_state, double timestamp_seconds) {
   // Reset coast mode state
   gnss_consecutive_rejects_ = 0;
   gnss_in_coast_            = false;
+  gnss_in_recovery_         = false;
   ukf_.set_position_noise_scale(1.0);
 
   // Initialize adaptive noise matrices
@@ -143,6 +144,7 @@ void FusionCore::reset() {
   imu_buffer_.clear();
   gnss_consecutive_rejects_ = 0;
   gnss_in_coast_            = false;
+  gnss_in_recovery_         = false;
   ukf_.set_position_noise_scale(1.0);
 }
 
@@ -267,7 +269,8 @@ void FusionCore::predict_to(double timestamp_seconds) {
       !gnss_in_coast_ &&
       (timestamp_seconds - last_gnss_time_) > config_.gnss_coast_timeout_s)
   {
-    gnss_in_coast_ = true;
+    gnss_in_coast_    = true;
+    gnss_in_recovery_ = true;  // accept first returning fix unconditionally
     ukf_.set_position_noise_scale(config_.gnss_coast_q_factor);
   }
 
@@ -688,8 +691,11 @@ bool FusionCore::apply_gnss_update(
     : std::function<sensors::GnssPosMeasurement(const StateVector&)>(
         sensors::gnss_pos_measurement_function);
 
-  // Mahalanobis outlier rejection for GNSS position
-  if (config_.outlier_rejection) {
+  // Mahalanobis outlier rejection for GNSS position.
+  // Bypassed when in recovery mode: after a long blackout, dead-reckoning error
+  // can exceed 100m, which always fails the chi2 gate. The first fix after
+  // recovery is accepted unconditionally to snap the filter back to reality.
+  if (config_.outlier_rejection && !gnss_in_recovery_) {
     sensors::GnssPosMeasurement innovation_pre;
     sensors::GnssPosNoiseMatrix S;
     ukf_.predict_measurement<sensors::GNSS_POS_DIM>(z, h_gnss, R, innovation_pre, S);
@@ -708,9 +714,10 @@ bool FusionCore::apply_gnss_update(
     }
   }
 
-  // GPS accepted: exit coast mode and reset counter
+  // GPS accepted: exit coast and recovery modes, reset counter
   if (gnss_in_coast_) {
-    gnss_in_coast_ = false;
+    gnss_in_coast_    = false;
+    gnss_in_recovery_ = false;
     ukf_.set_position_noise_scale(1.0);
   }
   gnss_consecutive_rejects_ = 0;

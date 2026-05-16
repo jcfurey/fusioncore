@@ -284,6 +284,12 @@ private:
   // Inertial coast mode tracking
   int  gnss_consecutive_rejects_ = 0;
   bool gnss_in_coast_            = false;
+  // Recovery mode: after a timeout-triggered coast, accept the first returning
+  // GPS fix unconditionally (bypass chi2 gate). After 7+ minutes blind, dead
+  // reckoning error can be hundreds of meters, far outside the chi2 gate.
+  // Without this, coast mode inflates P but can't grow sigma fast enough to
+  // accept the recovery fix, causing permanent GPS rejection.
+  bool gnss_in_recovery_         = false;
 
   // Mahalanobis distance test
   template <int z_dim>
