@@ -93,21 +93,24 @@ Most sensor fusion tutorials assume clean data. Real robots don't have clean dat
 
 ## Benchmark
 
-FusionCore vs robot_localization on the [NCLT dataset](http://robots.engin.umich.edu/nclt/): same IMU + wheel odometry + GPS, no manual tuning. Six 30-minute sequences. RL-EKF run with chi-squared-equivalent thresholds at 99.9% confidence.
+FusionCore vs robot_localization on the [NCLT dataset](http://robots.engin.umich.edu/nclt/): same IMU + wheel odometry + GPS, no manual tuning. Nine full-length sequences across all seasons. RL-EKF run with chi-squared-equivalent thresholds at 99.9% confidence.
 
-| Sequence | FC ATE RMSE | RL-EKF ATE RMSE | RL-UKF |
-|---|---|---|---|
-| 2012-01-08 | **5.6 m** | 13.0 m | NaN divergence at t=31 s |
-| 2012-02-04 | **9.7 m** | 19.1 m | NaN divergence at t=22 s |
-| 2012-03-31 | **4.2 m** | 54.3 m | NaN divergence at t=18 s |
-| 2012-08-20 | **7.5 m** | 24.1 m | NaN divergence |
-| 2012-11-04 | 28.6 m | **9.6 m** | NaN divergence |
-| 2013-02-23 | **4.1 m** | 11.0 m | NaN divergence |
+| Sequence | Season | Duration | FC ATE RMSE | RL-EKF ATE RMSE | Winner |
+|---|---|---|---|---|---|
+| 2012-01-08 | Winter | 92 min | **18.6 m** | 41.2 m | FC +55% |
+| 2012-02-04 | Winter | 77 min | **49.7 m** | 265.5 m | FC +81% |
+| 2012-03-31 | Spring | 87 min | **22.0 m** | 156.5 m | FC +86% |
+| 2012-05-11 | Spring | 84 min | **9.7 m** | 11.5 m | FC +16% |
+| 2012-06-15 | Summer | 55 min | 49.2 m | **18.2 m** | RL +63% |
+| 2012-08-20 | Summer | 83 min | 98.3 m | **10.6 m** | RL +89% |
+| 2012-09-28 | Fall | 77 min | **10.8 m** | 55.7 m | FC +81% |
+| 2012-10-28 | Fall | 85 min | **29.9 m** | 60.0 m | FC +50% |
+| 2012-11-04 | Fall | 79 min | **60.1 m** | 122.0 m | FC +51% |
 
-RL-UKF diverges with NaN on all six sequences. RL-EKF completes all six but with 2–10x higher ATE. FusionCore loses on the 2012-11-04 sequence: root cause under investigation.
+RL-UKF diverges with NaN on all nine sequences. FusionCore wins 7/9 sequences. The two FC losses are driven by a GPS data quality issue on 2012-08-20 (105 corrupt mode-3 fixes in a 24-second window) and accumulated heading error during a 461-second GPS blackout on 2012-06-15. See [benchmarks/README.md](benchmarks/README.md) for full per-sequence analysis.
 
 <p align="center">
-  <img src="docs/assets/fig2_traj_grid.png" alt="Trajectory overlay: all 6 sequences, SE3-aligned to RTK GPS ground truth" width="650">
+  <img src="docs/assets/fig2_traj_grid.png" alt="Trajectory overlay: all 9 sequences, SE3-aligned to RTK GPS ground truth" width="650">
 </p>
 
 ---
@@ -118,7 +121,7 @@ If any of these have bitten you, FusionCore was built with them in mind:
 
 | robot_localization issue | What FusionCore does instead |
 |---|---|
-| UKF diverges with NaN on GPS-heavy sequences ([#780](https://github.com/cra-ros-pkg/robot_localization/issues/780), [#777](https://github.com/cra-ros-pkg/robot_localization/issues/777)) | Chi-squared gate on every sensor; covariance bounded at each step. All six NCLT sequences finish without NaN. |
+| UKF diverges with NaN on GPS-heavy sequences ([#780](https://github.com/cra-ros-pkg/robot_localization/issues/780), [#777](https://github.com/cra-ros-pkg/robot_localization/issues/777)) | Chi-squared gate on every sensor; covariance bounded at each step. All nine NCLT sequences finish without NaN. |
 | navsat_transform crashes at UTM zone boundaries ([#951](https://github.com/cra-ros-pkg/robot_localization/issues/951), [#904](https://github.com/cra-ros-pkg/robot_localization/issues/904)) | GPS fused directly in ECEF. No UTM projection, no zone boundary. |
 | No non-holonomic constraint for wheeled robots ([#744](https://github.com/cra-ros-pkg/robot_localization/issues/744)) | Built-in NHC: lateral and vertical velocity zeroed as a virtual measurement on every encoder update. |
 | Delayed sensor messages cause missed updates ([#911](https://github.com/cra-ros-pkg/robot_localization/issues/911)) | Rolling IMU buffer with retrodiction. Late GPS fixes replay missed IMU steps automatically (up to 500 ms). |

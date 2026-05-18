@@ -23,7 +23,7 @@ FusionCore fuses IMU gyro/accel measurements at full rate (typically 100-200 Hz)
 
 The update path:
 
-1. IMU predict steps run at full rate, integrating linear acceleration and gyro into the 22-state UKF.
+1. IMU predict steps run at full rate, integrating linear acceleration and gyro into the 23-state UKF.
 2. Each VSLAM pose arrives as a 6D measurement `[x, y, z, roll, pitch, yaw]`.
 3. Mahalanobis outlier gate (chi2(6, 0.999) = 22.46) rejects reinitializations and tracking jumps.
 4. If accepted: UKF update step corrects position and orientation; covariance shrinks.
