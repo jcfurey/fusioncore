@@ -35,19 +35,28 @@ No silent failures. No mysterious drift from a missing transform you didn't noti
 
 ## State vector
 
-FusionCore maintains a 22-dimensional state vector:
+FusionCore maintains a **23-dimensional state vector**:
 
-| Index | State | Units |
-|-------|-------|-------|
-| 0–2   | Position x, y, z | m (ENU frame) |
-| 3–6   | Orientation quaternion qw, qx, qy, qz |: |
-| 7–9   | Linear velocity vx, vy, vz | m/s (body frame) |
-| 10–12 | Angular velocity wx, wy, wz | rad/s (body frame) |
-| 13–15 | Linear acceleration ax, ay, az | m/s² (body frame) |
-| 16–18 | Gyroscope bias bωx, bωy, bωz | rad/s |
-| 19–21 | Accelerometer bias bax, bay, baz | m/s² |
+| Index | State | Units | Notes |
+|-------|-------|-------|-------|
+| 0–2   | Position x, y, z | m (ENU frame) | Local ENU, origin at first GPS fix |
+| 3–6   | Orientation qw, qx, qy, qz | unit quaternion | Body-to-world rotation |
+| 7–9   | Linear velocity vx, vy, vz | m/s (body frame) | |
+| 10–12 | Angular velocity wx, wy, wz | rad/s (body frame) | |
+| 13–15 | Linear acceleration ax, ay, az | m/s² (body frame) | |
+| 16–18 | Gyroscope bias bωx, bωy, bωz | rad/s | Slow MEMS drift |
+| 19–21 | Accelerometer bias bax, bay, baz | m/s² | Slow MEMS drift |
+| 22    | Encoder WZ bias b_ewz | rad/s | Systematic encoder heading rate offset |
 
 Orientation is stored as a unit quaternion internally. Roll, pitch, and yaw are derived from it for output and logging only.
+
+**Why encoder WZ bias is in the state vector**
+
+Wheel encoders have a small systematic angular velocity bias: the robot reports a slightly non-zero turn rate even when driving perfectly straight. This happens from wheel diameter mismatch, slight mechanical asymmetry, and mounting offset. Unlike IMU gyro bias (which drifts slowly over time), the encoder WZ bias is primarily mechanical and changes only with wear.
+
+This bias matters more than it sounds. Over a 1-minute straight run at typical campus speed (~1.5 m/s), a 0.002 rad/s encoder WZ bias produces ~0.12 rad (~7 degrees) of heading error. At 1.5 m/s, that is a lateral displacement of ~8 m. On longer sequences or repeated loops, it accumulates further.
+
+FusionCore estimates b_ewz online using the cross-covariance between encoder WZ and GPS position: if encoder WZ has a consistent offset, the GPS positions will systematically disagree with the encoder-integrated heading. The filter converges on the bias estimate within a few minutes of driving and subtracts it automatically. During GPS blackouts, the already-estimated bias is subtracted from encoder WZ readings rather than allowed to accumulate into heading error.
 
 ---
 
@@ -228,6 +237,69 @@ radar.vel_noise: 0.1    # m/s, used when message has no covariance
 ```
 
 Expects `nav_msgs/Odometry` with velocity in robot body frame (`linear.x` = forward, `linear.y` = lateral). The bridge node handles raw Doppler extraction and frame conversion -- FusionCore receives clean body-frame velocity.
+
+---
+
+## GPS track heading fusion
+
+Dual-antenna GPS systems directly measure heading. Most deployments don't have one. FusionCore compensates by fusing heading from GPS track geometry: if the robot traveled a distance d in direction theta according to GPS positions, then the robot's heading was approximately theta.
+
+This is the same mechanism `navsat_transform` uses internally in robot_localization. FusionCore implements it as a direct yaw pseudo-measurement fused into the UKF:
+
+```
+sigma_heading = sigma_xy / displacement  (radians)
+```
+
+where `sigma_xy` is the GPS position noise and `displacement` is the distance since the last heading fusion. At 3m GPS noise and 10m displacement, heading sigma = 0.3 rad (17 degrees), which is still useful for coarse heading correction. At 25m displacement it drops to 0.12 rad (7 degrees), tight enough to observe encoder WZ bias.
+
+The fusion only fires when:
+1. Displacement since last heading fusion >= `gnss.track_heading_min_dist` (default 5m)
+2. Computed heading sigma <= `gnss.track_heading_max_sigma` (default 0.4 rad)
+3. The robot is not spinning (heading rate is changing slowly)
+
+This mechanism is what allows the encoder WZ bias to be estimated: repeated GPS track heading fusions over many segments build up the cross-covariance between b_ewz and position, and the Kalman update starts attributing systematic heading error to the bias state rather than the position state.
+
+To disable: `gnss.track_heading_enabled: false`. Disabling it means yaw is only corrected by dual-antenna heading or 9-axis IMU orientation. Encoder WZ bias estimation degrades.
+
+---
+
+## Inertial coast mode
+
+During a GPS blackout -- whether because the receiver stopped publishing (tunnel, power loss) or because consecutive fixes fail the chi2 gate -- FusionCore enters **inertial coast mode**.
+
+Coast mode serves two purposes:
+
+**1. Keep the chi2 gate from freezing the filter out of its own recovery**
+
+When the robot drifts during a GPS blackout, the predicted GPS position diverges from the actual GPS position. On the blackout's end, valid GPS fixes may have innovations large enough to fail the chi2 gate -- not because they are outliers, but because the filter has lost track of where it is. Without any intervention, the filter would reject all returning fixes and never recover.
+
+Coast mode solves this by inflating `Q_position` by `gnss.coast_q_factor` during the blackout. This causes position covariance P to grow at an accelerated rate. The innovation covariance S = HPH^T + R grows with P, and chi2 = nu^T S^-1 nu naturally decreases. By the time GPS resumes, P has grown large enough that valid returning fixes pass the gate regardless of how far the filter drifted.
+
+**2. Let encoder WZ correct heading bias faster**
+
+During GPS absence, heading errors accumulate at `gyro_bias * time` with no GPS heading cross-covariance to correct them. Coast mode inflates `Q_gyro_bias` by `gnss.coast_q_bias_factor` (default 100x) to loosen the filter's confidence in its current bias estimate. Simultaneously, `R_imu[WZ,WZ]` is inflated by `gnss.coast_imu_wz_scale` (default 500x) to down-weight the IMU heading rate and let encoder WZ dominate heading integration. Together these allow the filter to rapidly re-estimate gyro bias from encoder WZ readings during the blackout, rather than letting a stale bias estimate silently corrupt heading.
+
+**Coast mode triggers:**
+- After `gnss.coast_n` consecutive GPS rejections (default: 3)
+- After `gnss.coast_timeout_s` seconds of GPS silence (handles receiver-silent outages where no fixes arrive to reject)
+
+**Coast mode exits** when the first GPS fix passes the chi2 gate after the blackout ends. Process noise returns to normal immediately.
+
+```yaml
+gnss.coast_n: 3                 # rejections before entering coast
+gnss.coast_q_factor: 10.0       # position Q multiplier during coast
+gnss.coast_q_bias_factor: 100.0 # gyro bias Q multiplier during coast
+gnss.coast_imu_wz_scale: 500.0  # R_imu[WZ] multiplier: encoder dominates heading
+gnss.coast_timeout_s: 30.0      # also enter coast if GPS silent this long
+```
+
+**Choosing coast_q_factor**
+
+This parameter controls a tradeoff:
+- Too high (200+): P grows so large that even outlier GPS fixes (100-800m off) may pass chi2 during recovery
+- Too low (1.0-2.0): P may not grow enough for legitimate drift corrections to pass chi2 after long blackouts
+
+The NCLT benchmarks use `coast_q_factor: 10.0`. After a 194s blackout at this value, sigma_xy = 44m, which accepts drift corrections up to 178m but rejects outliers 840m off (chi2 = 357 >> threshold 16.27). After a 461s blackout, sigma_xy = 68m, which accepts drift corrections up to 274m.
 
 ---
 
