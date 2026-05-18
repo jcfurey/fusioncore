@@ -32,8 +32,8 @@ robot_localization is a solid, well-maintained package used on tens of thousands
 | GPS fix quality gating | Not built-in | HDOP, satellite count, fix type |
 | Dual antenna heading | Not built-in | Yes |
 | Inertial coast mode | Not built-in | Auto on sustained GPS dropout |
-| GPS velocity fusion (wheel slip detection) | Not built-in | Yes -- Doppler vs wheel innovation reveals slip |
-| Radar Doppler velocity fusion | Not built-in | Yes -- works indoors, all weather, slip detection |
+| GPS velocity fusion (wheel slip detection) | Not built-in | Yes (Doppler vs wheel innovation reveals slip) |
+| Radar Doppler velocity fusion | Not built-in | Yes (works indoors, all weather, slip detection) |
 | ROS 2 Jazzy / Humble | Ported from ROS 1 | Native, from scratch |
 
 ---

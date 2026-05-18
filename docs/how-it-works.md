@@ -214,11 +214,11 @@ Leave `gnss.velocity_topic` empty (the default) to disable. No behavior change f
 
 ## Radar Doppler velocity fusion
 
-4D imaging radar outputs a point cloud where every point carries a Doppler velocity -- the radial speed of that point relative to the sensor. By fitting a velocity model across all points, a bridge node can extract the robot's ego-velocity: how fast the robot itself is moving, measured purely from radio wave physics.
+4D imaging radar outputs a point cloud where every point carries a Doppler velocity: the radial speed of that point relative to the sensor. By fitting a velocity model across all points, a bridge node can extract the robot's ego-velocity: how fast the robot itself is moving, measured purely from radio wave physics.
 
 This ego-velocity is completely independent of wheels, GPS, and IMU. It works indoors. It works in rain, fog, dust, and complete darkness. It does not care whether the wheels are slipping.
 
-FusionCore fuses this as a separate measurement update alongside wheel odometry. The innovation between radar velocity and wheel velocity directly reveals slip -- the same principle as GPS velocity fusion, but available in every environment instead of only outdoors with a sky view.
+FusionCore fuses this as a separate measurement update alongside wheel odometry. The innovation between radar velocity and wheel velocity directly reveals slip, using the same principle as GPS velocity fusion, but available in every environment instead of only outdoors with a sky view.
 
 **Supported hardware** (via bridge nodes):
 
@@ -236,7 +236,7 @@ radar.velocity_topic: "/radar/ego_velocity"
 radar.vel_noise: 0.1    # m/s, used when message has no covariance
 ```
 
-Expects `nav_msgs/Odometry` with velocity in robot body frame (`linear.x` = forward, `linear.y` = lateral). The bridge node handles raw Doppler extraction and frame conversion -- FusionCore receives clean body-frame velocity.
+Expects `nav_msgs/Odometry` with velocity in robot body frame (`linear.x` = forward, `linear.y` = lateral). The bridge node handles raw Doppler extraction and frame conversion. FusionCore receives clean body-frame velocity.
 
 ---
 
@@ -265,13 +265,13 @@ To disable: `gnss.track_heading_enabled: false`. Disabling it means yaw is only 
 
 ## Inertial coast mode
 
-During a GPS blackout -- whether because the receiver stopped publishing (tunnel, power loss) or because consecutive fixes fail the chi2 gate -- FusionCore enters **inertial coast mode**.
+During a GPS blackout (whether because the receiver stopped publishing due to tunnel or power loss, or because consecutive fixes fail the chi2 gate), FusionCore enters **inertial coast mode**.
 
 Coast mode serves two purposes:
 
 **1. Keep the chi2 gate from freezing the filter out of its own recovery**
 
-When the robot drifts during a GPS blackout, the predicted GPS position diverges from the actual GPS position. On the blackout's end, valid GPS fixes may have innovations large enough to fail the chi2 gate -- not because they are outliers, but because the filter has lost track of where it is. Without any intervention, the filter would reject all returning fixes and never recover.
+When the robot drifts during a GPS blackout, the predicted GPS position diverges from the actual GPS position. On the blackout's end, valid GPS fixes may have innovations large enough to fail the chi2 gate, not because they are outliers, but because the filter has lost track of where it is. Without any intervention, the filter would reject all returning fixes and never recover.
 
 Coast mode solves this by inflating `Q_position` by `gnss.coast_q_factor` during the blackout. This causes position covariance P to grow at an accelerated rate. The innovation covariance S = HPH^T + R grows with P, and chi2 = nu^T S^-1 nu naturally decreases. By the time GPS resumes, P has grown large enough that valid returning fixes pass the gate regardless of how far the filter drifted.
 
@@ -404,7 +404,7 @@ The predict step is the core of any UKF: it propagates the state forward in time
 
 The default model (`ConstantVelocityAcceleration`) assumes the robot can move freely in all directions. It integrates body-frame velocity and acceleration without any platform-specific constraints. This is correct for aerial vehicles and a reasonable approximation for ground robots.
 
-But a differential drive robot *cannot* move sideways. Physics forbids it. The default model does not know this -- it allows lateral velocity (`VY`) to grow between encoder updates via IMU acceleration integration. The measurement model corrects it at every encoder update, but between updates the uncertainty in `VY` accumulates unnecessarily. The position estimate then carries a small lateral smear that the covariance matrix reflects.
+But a differential drive robot *cannot* move sideways. Physics forbids it. The default model does not know this: it allows lateral velocity (`VY`) to grow between encoder updates via IMU acceleration integration. The measurement model corrects it at every encoder update, but between updates the uncertainty in `VY` accumulates unnecessarily. The position estimate then carries a small lateral smear that the covariance matrix reflects.
 
 The `DifferentialDrive` model enforces the non-holonomic constraint directly in the predict step: `VY` and `AY` are zeroed every time the UKF propagates forward. The filter now *knows* lateral velocity does not grow. The covariance in `VY` stays tight, position integration never accumulates false lateral displacement, and the encoder measurement just confirms what the model already predicted.
 
@@ -438,7 +438,7 @@ motion_model: "ConstantVelocityAcceleration"   # or just leave the line out
 
 **What the DifferentialDrive model does not do**
 
-It does not break slip detection. If the wheels are actually sliding laterally (ice, mud, ramp), the GPS velocity or radar Doppler measurement will still observe non-zero lateral velocity in the update step and correct the state accordingly. The constraint applies only to the prediction -- the filter can still update away from it when the evidence demands it.
+It does not break slip detection. If the wheels are actually sliding laterally (ice, mud, ramp), the GPS velocity or radar Doppler measurement will still observe non-zero lateral velocity in the update step and correct the state accordingly. The constraint applies only to the prediction. The filter can still update away from it when the evidence demands it.
 
 ---
 
@@ -450,7 +450,7 @@ FusionCore addresses this with two tools: deterministic replay and state checkpo
 
 **Deterministic replay**
 
-When replaying a bag with `ros2 bag play --clock` and `use_sim_time: true`, FusionCore uses the bag's message timestamps everywhere -- including the stationary bias initialization window. This means:
+When replaying a bag with `ros2 bag play --clock` and `use_sim_time: true`, FusionCore uses the bag's message timestamps everywhere, including the stationary bias initialization window. This means:
 
 - Same bag + same config = identical output every run
 - Tweaking one parameter and diffing trajectories actually works
@@ -477,11 +477,11 @@ Suppose you have a 20-minute bag and the trajectory goes wrong at minute 15. Wit
 
 1. Replay the bag to minute 14
 2. Call `save_checkpoint`
-3. Call `load_checkpoint` -- the filter is now back at minute 14 in under a second
+3. Call `load_checkpoint`; the filter is now back at minute 14 in under a second
 4. Let the bag play from minute 14, observe what happens at minute 15
 5. Tweak a parameter, call `load_checkpoint` again, repeat
 
-The checkpoint file is plain text -- human readable, diffable, and editable. You can inspect the state vector directly to understand what the filter believed at the moment of failure.
+The checkpoint file is plain text: human readable, diffable, and editable. You can inspect the state vector directly to understand what the filter believed at the moment of failure.
 
 ```yaml
 replay.checkpoint_path: "/tmp/fusioncore_checkpoint.txt"   # default

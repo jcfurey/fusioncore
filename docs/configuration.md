@@ -89,7 +89,7 @@ fusioncore:
     # Accepts nav_msgs/Odometry with velocity in robot body frame:
     #   linear.x = forward speed (m/s), linear.y = lateral speed (m/s)
     # A bridge node extracts ego-velocity from raw Doppler point cloud and publishes here.
-    # Works indoors and in all weather -- rain, fog, dust, darkness.
+    # Works indoors and in all weather: rain, fog, dust, darkness.
     # radar.vel_noise is used when the message covariance is zero or negative.
     radar.velocity_topic: ""
     radar.vel_noise: 0.1        # m/s fallback noise when message has no covariance
@@ -285,7 +285,7 @@ Do not use `DifferentialDrive` or `Ackermann` for:
 
 ## Wait for all sensors: replacing sleep() in launch files
 
-A common pattern in ROS launch files is `sleep(3)` before starting the navigation stack to give sensors time to come online. This is fragile -- on a slow machine the sensors might need 5 seconds, and on a fast one you waste 3 seconds on every launch.
+A common pattern in ROS launch files is `sleep(3)` before starting the navigation stack to give sensors time to come online. This is fragile: on a slow machine the sensors might need 5 seconds, and on a fast one you waste 3 seconds on every launch.
 
 `init.wait_for_all_sensors: true` replaces this entirely. FusionCore holds initialization until it has seen at least one message from every sensor you configured. Then it starts. No sleep needed.
 
@@ -306,7 +306,7 @@ This is especially useful at competition startup, on-site robot power-on, or any
 
 ## Deterministic replay: debugging without hardware
 
-See [How It Works -- Deterministic replay](how-it-works.md#deterministic-replay-and-state-checkpoints) for the full workflow. Quick reference:
+See [How It Works: Deterministic replay](how-it-works.md#deterministic-replay-and-state-checkpoints) for the full workflow. Quick reference:
 
 ```bash
 # Save filter state at any point during bag replay
