@@ -128,6 +128,39 @@ This tells FusionCore the driver has already removed gravity, so the measurement
 
 ---
 
+## SLAM map looks like a starburst or explosion pattern
+
+Each incoming scan is placed at a different wrong position, and over time the map fans out in all directions from where the robot started.
+
+This is caused by RTABMAP's SLAM node receiving a corrupted odometry estimate. The most common cause: RTABMAP is subscribed to FusionCore's `/fusion/odom` (or remapped to `/odom`), and FusionCore's estimate degraded at some point during the run.
+
+FusionCore fuses ICP odometry with IMU. When the ICP node throws a registration failure mid-run (the `Registration failed: cannot compute transform` error, which often happens during fast rotation), FusionCore briefly runs on IMU alone. If the IMU has any calibration offset, the position estimate diverges rapidly. Any scans RTABMAP places during that window get stamped with wrong positions and corrupt the map permanently.
+
+**Fix:** wire RTABMAP's SLAM node to subscribe to `icp_odom` directly instead of FusionCore's output:
+
+```python
+Node(
+    package='rtabmap_slam', executable='rtabmap', output='screen',
+    parameters=[{
+        'frame_id': 'base_link',
+        'subscribe_scan': True,
+        'approx_sync': True,
+    }],
+    remappings=[
+        ('odom', '/icp_odom'),
+        ('imu', '/imu/data'),
+    ]
+),
+```
+
+With this setup, when ICP fails mid-run, RTABMAP stops placing scans and waits for ICP to recover rather than placing them at bad positions. The map only accumulates from frames where the position was geometrically reliable.
+
+FusionCore still runs and still owns the `odom → base_link` TF. Nav2 still reads `/fusion/odom`. The change only affects what RTABMAP uses when deciding where to stamp each incoming scan. FusionCore is the right source for navigation. Scan-consistent ICP odometry is the right source for map building.
+
+Also check that `frame_id` in your RTABMAP parameters is set to `base_link`, not a camera frame like `oak-d-base-frame`. Building the map relative to a camera frame causes the map to rotate around the camera origin during turns rather than the robot center, which produces subtle geometric errors at every rotation.
+
+---
+
 ## Camera image not showing in RtabmapViz
 
 This is not a FusionCore issue. FusionCore publishes `/fusion/odom` and `odom → base_link` TF: it has no involvement in the camera pipeline.
