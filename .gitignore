@@ -60,6 +60,7 @@ new_stargazers.tsv
 check_new_stars.sh
 
 posts/
+!docs/blog/posts/
 
 # Article drafts, Word docs, and figure generation scripts: not for public repo
 outreach/

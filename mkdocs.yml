@@ -51,6 +51,7 @@ plugins:
       categories: false
       authors: false
       post_excerpt: required
+  - tags
 
 nav:
   - Home: index.md
