@@ -80,6 +80,9 @@ demo_result.png
 benchmarks/**/launch.log
 benchmarks/**/bag/
 
+# Generated video files: reproducible from TUM files via benchmarks/make_video.py
+benchmarks/*.mp4
+
 # Paper source: only the PDF is committed
 paper/*.tex
 paper/*.png
