@@ -2069,18 +2069,100 @@ private:
     // Publish UKF covariance so Nav2 and other consumers see real uncertainty.
     // pose.covariance is 6x6 row-major for [x, y, z, roll, pitch, yaw].
     // twist.covariance is 6x6 row-major for [vx, vy, vz, wx, wy, wz].
-    // Extract the relevant 6x6 sub-blocks from the 21x21 P matrix.
     const fusioncore::StateMatrix& P = s.P;
-    // Pose covariance: [x, y, z, roll, pitch, yaw] (ROS convention).
-    // Map orientation slots to QX, QY, QZ (3 of 4 quaternion components).
-    // QW is omitted: it's constrained by unit norm and has near-zero variance.
-    static constexpr int pose_idx[6] = {
-      fusioncore::X, fusioncore::Y, fusioncore::Z,
-      fusioncore::QX, fusioncore::QY, fusioncore::QZ
-    };
-    for (int i = 0; i < 6; ++i)
-      for (int j = 0; j < 6; ++j)
-        odom.pose.covariance[i * 6 + j] = P(pose_idx[i], pose_idx[j]);
+
+    // Pose covariance: ROS convention is [x, y, z, roll, pitch, yaw].
+    // The UKF tracks orientation as a quaternion (qw, qx, qy, qz), so we must
+    // propagate quaternion covariance through the quaternion-to-Euler Jacobian:
+    //
+    //   C_euler = J * P_quat * J^T      (3x3 Euler covariance)
+    //   C_pos_euler = P_pos_quat * J^T  (3x3 position-Euler cross-covariance)
+    //
+    // where J = d(roll,pitch,yaw)/d(qw,qx,qy,qz) is the 3x4 analytical Jacobian
+    // evaluated at the current quaternion. Without this step, Nav2 would read
+    // quaternion component variance instead of yaw variance (wrong by ~4x for
+    // small angles, increasingly wrong as orientation changes).
+    {
+      const double qw = s.x[fusioncore::QW];
+      const double qx = s.x[fusioncore::QX];
+      const double qy = s.x[fusioncore::QY];
+      const double qz = s.x[fusioncore::QZ];
+
+      // Intermediate terms for the three Euler angle formulas.
+      const double t0 = 2.0 * (qw*qx + qy*qz);          // roll numerator
+      const double t1 = 1.0 - 2.0 * (qx*qx + qy*qy);    // roll denominator
+      const double t2 = std::clamp(2.0 * (qw*qy - qz*qx), -1.0, 1.0); // pitch sin
+      const double t3 = 2.0 * (qw*qz + qx*qy);           // yaw numerator
+      const double t4 = 1.0 - 2.0 * (qy*qy + qz*qz);    // yaw denominator
+
+      const double denom_roll  = t0*t0 + t1*t1;
+      const double denom_yaw   = t3*t3 + t4*t4;
+      // Pitch Jacobian has 1/sqrt(1-t2^2); clamp away from zero to avoid NaN
+      // near gimbal lock (pitch = +/-90 deg). At singularity the Jacobian is
+      // undefined; we clamp to produce large-but-finite covariance rather than NaN.
+      const double safe_pitch  = std::max(std::sqrt(1.0 - t2*t2), 1e-6);
+
+      // 3x4 Jacobian: rows = [roll, pitch, yaw], cols = [qw, qx, qy, qz].
+      Eigen::Matrix<double, 3, 4> J;
+
+      // d(roll)/d(qw, qx, qy, qz)
+      J(0,0) = 2.0*qx*t1 / denom_roll;
+      J(0,1) = (2.0*qw*t1 + 4.0*qx*t0) / denom_roll;
+      J(0,2) = (2.0*qz*t1 + 4.0*qy*t0) / denom_roll;
+      J(0,3) = 2.0*qy*t1 / denom_roll;
+
+      // d(pitch)/d(qw, qx, qy, qz)
+      J(1,0) =  2.0*qy / safe_pitch;
+      J(1,1) = -2.0*qz / safe_pitch;
+      J(1,2) =  2.0*qw / safe_pitch;
+      J(1,3) = -2.0*qx / safe_pitch;
+
+      // d(yaw)/d(qw, qx, qy, qz)
+      J(2,0) = 2.0*qz*t4 / denom_yaw;
+      J(2,1) = 2.0*qy*t4 / denom_yaw;
+      J(2,2) = (2.0*qx*t4 + 4.0*qy*t3) / denom_yaw;
+      J(2,3) = (2.0*qw*t4 + 4.0*qz*t3) / denom_yaw;
+
+      // 4x4 quaternion covariance sub-block from P (order: qw, qx, qy, qz).
+      static constexpr int qi[4] = {
+        fusioncore::QW, fusioncore::QX, fusioncore::QY, fusioncore::QZ
+      };
+      Eigen::Matrix4d P_quat;
+      for (int i = 0; i < 4; ++i)
+        for (int j = 0; j < 4; ++j)
+          P_quat(i,j) = P(qi[i], qi[j]);
+
+      // 3x4 position-quaternion cross-covariance (rows=XYZ, cols=qw,qx,qy,qz).
+      static constexpr int pi[3] = {
+        fusioncore::X, fusioncore::Y, fusioncore::Z
+      };
+      Eigen::Matrix<double, 3, 4> P_pos_quat;
+      for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 4; ++j)
+          P_pos_quat(i,j) = P(pi[i], qi[j]);
+
+      // Propagate through Jacobian.
+      const Eigen::Matrix3d C_euler     = J * P_quat * J.transpose();
+      const Eigen::Matrix3d C_pos_euler = P_pos_quat * J.transpose();
+
+      // Fill 6x6 pose covariance (row-major, [x,y,z,roll,pitch,yaw]).
+      // top-left 3x3: position covariance
+      for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j)
+          odom.pose.covariance[i*6 + j] = P(pi[i], pi[j]);
+      // top-right 3x3: position-Euler cross-covariance
+      for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j)
+          odom.pose.covariance[i*6 + (3+j)] = C_pos_euler(i, j);
+      // bottom-left 3x3: Euler-position cross-covariance (symmetric)
+      for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j)
+          odom.pose.covariance[(3+i)*6 + j] = C_pos_euler(j, i);
+      // bottom-right 3x3: Euler angle covariance
+      for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j)
+          odom.pose.covariance[(3+i)*6 + (3+j)] = C_euler(i, j);
+    }
 
     // Twist state indices: VX=6,VY=7,VZ=8,WX=9,WY=10,WZ=11
     static constexpr int twist_idx[6] = {

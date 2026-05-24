@@ -297,7 +297,7 @@ Coast mode solves this by inflating `Q_position` by `gnss.coast_q_factor` during
 
 **2. Let encoder WZ correct heading bias faster**
 
-During GPS absence, heading errors accumulate at `gyro_bias * time` with no GPS heading cross-covariance to correct them. Coast mode inflates `Q_gyro_bias` by `gnss.coast_q_bias_factor` (default 100x) to loosen the filter's confidence in its current bias estimate. Simultaneously, `R_imu[WZ,WZ]` is inflated by `gnss.coast_imu_wz_scale` (default 500x) to down-weight the IMU heading rate and let encoder WZ dominate heading integration. Together these allow the filter to rapidly re-estimate gyro bias from encoder WZ readings during the blackout, rather than letting a stale bias estimate silently corrupt heading.
+During GPS absence, heading errors accumulate at `gyro_bias * time` with no GPS heading cross-covariance to correct them. Coast mode inflates `Q_gyro_bias` by `gnss.coast_q_bias_factor` (default 100x) to loosen the filter's confidence in its current bias estimate. `R_imu[WZ,WZ]` can optionally be inflated by `gnss.coast_imu_wz_scale` (default 1.0, disabled) to down-weight the IMU heading rate and let encoder WZ dominate heading integration. When enabled (values of 200-1000x are typical for outdoor robots), the filter rapidly re-estimates gyro bias from encoder WZ readings during the blackout instead of letting a stale bias estimate silently corrupt heading. Leave at 1.0 if you trust your IMU gyro over your encoder during blackouts, or if you have no wheel encoder.
 
 **Coast mode triggers:**
 - After `gnss.coast_n` consecutive GPS rejections (default: 5)
@@ -306,11 +306,17 @@ During GPS absence, heading errors accumulate at `gyro_bias * time` with no GPS 
 **Coast mode exits** when the first GPS fix passes the chi2 gate after the blackout ends. Process noise returns to normal immediately.
 
 ```yaml
-gnss.coast_n: 5                 # rejections before entering coast
-gnss.coast_q_factor: 10.0       # position Q multiplier during coast
-gnss.coast_q_bias_factor: 100.0 # gyro bias Q multiplier during coast
-gnss.coast_imu_wz_scale: 500.0  # R_imu[WZ] multiplier: encoder dominates heading
-gnss.coast_timeout_s: 30.0      # also enter coast if GPS silent this long
+# Defaults:
+gnss.coast_n: 5                  # consecutive rejections before entering coast
+gnss.coast_q_factor: 20.0        # position Q multiplier during coast
+gnss.coast_q_bias_factor: 100.0  # gyro bias Q multiplier during coast
+gnss.coast_imu_wz_scale: 1.0     # R_imu[WZ] multiplier (1.0 = disabled, no effect)
+gnss.coast_timeout_s: 0.0        # enter coast after silence (0.0 = disabled)
+
+# Recommended tuning for outdoor robots with frequent GPS blackouts:
+# gnss.coast_q_factor: 20.0
+# gnss.coast_imu_wz_scale: 500.0  # encoder dominates heading during blackout
+# gnss.coast_timeout_s: 30.0      # also enter coast if GPS receiver goes silent
 ```
 
 **Choosing coast_q_factor**
@@ -319,7 +325,7 @@ This parameter controls a tradeoff:
 - Too high (200+): P grows so large that even outlier GPS fixes (100-800m off) may pass chi2 during recovery
 - Too low (1.0-2.0): P may not grow enough for legitimate drift corrections to pass chi2 after long blackouts
 
-The NCLT benchmarks use `coast_q_factor: 10.0`. After the 228s first blackout in 2012-08-20, sigma_xy = 48m, which accepts drift corrections up to 193m but rejects outliers 840m off (chi2 = 306 >> threshold 16.27). After the 461s blackout in 2012-06-15, sigma_xy = 68m, which accepts drift corrections up to 274m.
+The NCLT benchmarks were run with `coast_q_factor: 10.0` (conservative, below the default of 20.0). After the 228s first blackout in 2012-08-20, sigma_xy = 48m, which accepts drift corrections up to 193m but rejects outliers 840m off (chi2 = 306 >> threshold 16.27). After the 461s blackout in 2012-06-15, sigma_xy = 68m, which accepts drift corrections up to 274m. At the default of 20.0, P grows faster and the recovery window is wider.
 
 ---
 

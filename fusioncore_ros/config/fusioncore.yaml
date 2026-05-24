@@ -45,7 +45,10 @@ fusioncore:
     imu.remove_gravitational_acceleration: false
     # Override the IMU TF frame. Leave empty to use msg->header.frame_id.
     # Set to your IMU frame if the driver publishes with an empty frame_id.
-    imu.frame_id: "base_link"
+    # WARNING: setting this to base_link disables the TF rotation lookup entirely,
+    # which is wrong if your IMU is mounted at any angle relative to base_link.
+    # Leave empty unless your driver publishes with no frame_id at all.
+    imu.frame_id: ""
 
     # Optional second IMU source. When non-empty, FusionCore subscribes and
     # calls update_imu() for each message, treating both sensors as independent
