@@ -139,7 +139,7 @@ Real engineers, real robots, real sensor data. Not demos.
 > Outdoor agricultural robot, integration in progress
 
 > **Russ Hall**, Andino robot (Raspberry Pi)
-> OAK-D (visual odometry + IMU) + Velodyne VLP-16 + rtabmap: indoor mapping and autonomous outdoor navigation
+> OAK-D (stereo depth + IMU) + Velodyne VLP-16 + rtabmap: indoor SLAM mapping
 
 Running FusionCore on your robot? Drop a note in [Discussions #22](https://github.com/manankharwar/fusioncore/discussions/22) and I will add you here.
 

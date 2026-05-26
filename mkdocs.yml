@@ -61,6 +61,7 @@ nav:
     - Overview & Configs: hardware/index.md
     - Indoor / Wheels only (no GPS): hardware/wheels-indoor.md
     - Indoor / LiDAR ICP (no GPS): hardware/icp-indoor.md
+    - Visual SLAM + IMU (no GPS): hardware/vslam-imu.md
     - Ackermann / Car-like Robots: hardware/ackermann.md
     - Environment Presets: hardware/environment-presets.md
   - Nav2 Integration: nav2.md
