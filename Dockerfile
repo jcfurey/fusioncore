@@ -40,7 +40,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-numpy \
     python3-matplotlib \
     ros-jazzy-gps-msgs \
-    libproj-dev \ 
+    libproj25 \
     ros-jazzy-geographic-msgs \
     && rm -rf /var/lib/apt/lists/*
 

@@ -109,7 +109,7 @@ Your robot's sensor topics may not match FusionCore's defaults. The defaults are
 |---|---|---|
 | IMU | `/imu/data` | `sensor_msgs/Imu` |
 | GNSS | `/gnss/fix` | `sensor_msgs/NavSatFix` |
-| Encoder (wheel odometry) | `/odom` | `nav_msgs/Odometry` |
+| Encoder (wheel odometry) | `/odom/wheels` | `nav_msgs/Odometry` |
 
 Use ROS 2's `--ros-args -r` flag to remap topics at launch time:
 
@@ -122,7 +122,7 @@ docker run --rm -it \
     --ros-args \
     -r /imu/data:=/sensors/imu_0/data \
     -r /gnss/fix:=/gps/fix \
-    -r /odom:=/wheel_odom
+    -r /odom/wheels:=/wheel_odom
 ```
 
 ### How it works
@@ -184,7 +184,7 @@ docker run --rm -it \
     fusioncore_config:=./config/robot.yaml \
     -r fusioncore:/imu/data:=/sensors/imu_0/data \
     -r fusioncore:/gnss/fix:=/gps/fix \
-    -r fusioncore:/odom:=/wheel_odom
+    -r fusioncore:/odom/wheels:=/wheel_odom
 ```
 
 ---
