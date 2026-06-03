@@ -201,20 +201,43 @@ If transforms are printing, the error is a race condition at startup: the downst
 
 ## Encoder or GPS getting rejected (outlier gate)
 
-Check diagnostics:
+The fastest way to diagnose rejections is to look at the structured debug topic instead of parsing log lines:
 
 ```bash
-ros2 topic echo /diagnostics --once
+ros2 topic echo /fusion/debug/gnss_status
 ```
 
-If you see high outlier counts for a sensor, the Mahalanobis gate is rejecting its measurements. Common causes:
+Every GPS fix produces one message here, whether it was accepted or not. The `rejection_reason` field tells you exactly which gate fired. The `mahalanobis_sq` field tells you how far the fix was from the filter's prediction (-1.0 means the quality gate failed before the math ran).
+
+```yaml
+accepted: false
+rejection_reason: HDOP_HIGH     # quality gate: signal was too noisy
+mahalanobis_sq: -1.0            # chi2 math never ran
+hdop: 6.8                       # this is why
+
+---
+accepted: false
+rejection_reason: CHI2_FAILED   # passed quality gates but position was statistically implausible
+mahalanobis_sq: 847.3           # 53x above the 16.27 threshold: GPS spike
+chi2_threshold: 16.27
+```
+
+For encoder and IMU rejections, check the running counts:
+
+```bash
+ros2 topic echo /fusion/debug/filter_health --field encoder_outlier_count
+ros2 topic echo /fusion/debug/filter_health --field imu_outlier_count
+```
+
+Common causes and fixes:
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| GPS rejections at startup | Filter hasn't converged yet: large position uncertainty | Normal: clears after 30–60 s |
-| GPS rejections after outage | Inertial drift exceeded gate | Inertial coast mode will relax the gate automatically |
-| Encoder always rejected | Noise config too tight vs actual speed variance | Loosen `encoder.vel_noise` or enable `adaptive.encoder: true` |
-| IMU always rejected | Driver publishing with wrong scale or units | Check `linear_acceleration.z` at rest: should be ~9.81 or ~0.0 depending on `imu.remove_gravitational_acceleration` |
+| `rejection_reason: HDOP_HIGH` at startup | Open sky not acquired yet | Normal: clears within 30–60 s once receiver locks |
+| `rejection_reason: CHI2_FAILED` after outage | Filter drifted during blackout, returning GPS fails gate | Coast mode relaxes the gate automatically; no action needed |
+| `rejection_reason: CHI2_FAILED` persistently | Fix is far from what filter predicts | Check for antenna obstruction or TF mismatch |
+| `encoder_outlier_count` climbing | Noise config too tight vs actual velocity variance | Loosen `encoder.vel_noise` or enable `adaptive.encoder: true` |
+| `imu_outlier_count` climbing | Driver publishing wrong scale or units | Check `linear_acceleration.z` at rest: should be ~9.81 or ~0.0 depending on `imu.remove_gravitational_acceleration` |
 
 Do **not** lower outlier thresholds below their chi-squared critical values. At `7.0` normal GPS noise trips the gate and every fix gets rejected. The defaults are statistically calibrated.
 

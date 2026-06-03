@@ -190,8 +190,10 @@ gnss.min_fix_type: 4   # require RTK_FIXED: reject basic GPS entirely
 
 Rejection log:
 ```
-[WARN] GNSS fix rejected (fix_type=1, min=4, hdop=1.20, quality check or Mahalanobis gate)
+[WARN] GNSS fix rejected: FIX_TYPE_LOW (hdop=1.20, d2=-1.0, threshold=16.27)
 ```
+
+The structured reason and Mahalanobis distance are also available on `/fusion/debug/gnss_status` for every fix.
 
 !!! warning "NavSatFix RTK_FLOAT"
     `sensor_msgs/NavSatFix` has no STATUS_RTK_FLOAT. Status 2 maps to RTK_FIXED. Setting `min_fix_type: 3` will silently starve the filter. Use 2 or 4 as meaningful thresholds.
@@ -397,6 +399,97 @@ The full 6×6 `pose.covariance` is then assembled as:
 This gives Nav2, AMCL, slam_toolbox, and any other consumer the correct yaw (and roll/pitch) variance, including all cross-correlation terms between position and orientation.
 
 **Gimbal lock:** At pitch = ±90°, all three Euler Jacobian denominators go to zero simultaneously: roll and yaw become undefined and the Jacobian is singular. FusionCore clamps all three denominators to a minimum of 1e-12, producing large-but-finite covariance rather than NaN. This is the mathematically correct behavior: at the singularity the filter genuinely does not know the roll–yaw decomposition, and the inflated covariance communicates that uncertainty correctly to downstream consumers.
+
+---
+
+## Observability: seeing inside the filter
+
+The most common question when setting up a sensor fusion filter is "why did that GPS fix get rejected?" or "is the filter actually converging?" Before, FusionCore logged a generic warning and you had to guess. Now every GPS fix, accepted or rejected, produces a structured message on `/fusion/debug/gnss_status` that tells you exactly what happened.
+
+### Why a GPS fix gets rejected
+
+When a GPS fix arrives, FusionCore runs two checks in order. If either check fails, the fix is dropped and the reason is recorded.
+
+**Check 1: Quality gate**
+
+Before any math runs, FusionCore looks at the fix metadata:
+
+- Is `hdop` above `gnss.max_hdop` (default 4.0)? If yes: `HDOP_HIGH`, drop it.
+- Is `satellites` below `gnss.min_satellites` (default 4)? If yes: `MIN_SATS`, drop it.
+- Is `fix_type` below `gnss.min_fix_type` (default GPS_FIX)? If yes: `FIX_TYPE_LOW`, drop it.
+
+When a quality gate fails, `mahalanobis_sq` is set to -1.0. The chi-squared math never ran.
+
+**Check 2: Mahalanobis gate (chi-squared)**
+
+If the fix passes quality checks, FusionCore computes how statistically surprising it is given the filter's current belief:
+
+```
+d² = ν^T · S^-1 · ν
+```
+
+where `ν` is the difference between what the GPS reported and what the filter predicted, and `S` is the innovation covariance (how uncertain that prediction was). If `d²` exceeds 16.27 (the 99.9th percentile of a chi-squared distribution with 3 degrees of freedom), the fix is rejected as a statistical outlier. The rejection reason is `CHI2_FAILED`.
+
+This is the gate that catches GPS spikes, multipath jumps, and fixes that arrive when the filter has drifted far from reality during a blackout.
+
+### What the Mahalanobis distance tells you
+
+Think of it this way: if `mahalanobis_sq` is 4.3 and the threshold is 16.27, the fix was well within the acceptance region and fused normally. If it's 847.3, the fix was roughly 53 times the acceptance boundary: almost certainly a GPS spike or severe multipath.
+
+A rising `mahalanobis_sq` that stays just below the threshold is a warning sign: GPS quality is degrading and fixes are being accepted that are increasingly noisy. The adaptive noise system will compensate, but it is a good prompt to check the GPS antenna environment.
+
+### The two debug topics
+
+**/fusion/debug/gnss_status** fires on every GPS fix:
+
+```bash
+ros2 topic echo /fusion/debug/gnss_status
+```
+
+```yaml
+accepted: false
+rejection_reason: CHI2_FAILED
+mahalanobis_sq: 847.3
+chi2_threshold: 16.27
+hdop: 1.2
+satellites: 8
+in_coast_mode: false
+position_sigma_x: 2.4
+position_sigma_y: 2.4
+```
+
+**/fusion/debug/filter_health** fires at 1 Hz with the overall filter state:
+
+```bash
+ros2 topic echo /fusion/debug/filter_health
+```
+
+```yaml
+gnss_innovation_norm: 1.2      # meters: how far GPS fixes have been from predictions
+imu_innovation_norm: 0.08      # how far IMU readings have been from predictions
+encoder_innovation_norm: 0.3   # same for wheel encoders
+position_sigma_x: 1.4          # 1-sigma position uncertainty right now (meters)
+position_sigma_y: 1.4
+heading_sigma_deg: 3.2         # heading uncertainty (degrees)
+heading_validated: true
+heading_source: GPS_TRACK
+gnss_in_coast: false
+gnss_consecutive_rejects: 0
+distance_traveled_m: 47.3
+gnss_outlier_count: 3
+```
+
+### What these numbers look like when the filter is healthy
+
+**Position sigma** starts large (you set it at 30-50m in the initial covariance), drops rapidly as the first few GPS fixes arrive, then slowly grows during GPS blackouts and drops again on recovery. A plot of `position_sigma_x` over time should look like a sawtooth that trends downward as the filter learns the robot's motion.
+
+**Innovation norms** should be roughly stable during normal operation. A sudden spike in `gnss_innovation_norm` followed by a return to baseline is exactly what good GPS outlier rejection looks like. The spike means a bad fix arrived, the filter rejected it (check `gnss_status.rejection_reason`), and position continued from inertial prediction until GPS recovered.
+
+**`heading_sigma_deg`** starts large and drops once the robot has traveled 5 m in a consistent direction and GPS track heading fires for the first time. If it stays large, the robot may not have moved enough, or may be turning a lot. Once it drops below ~10 degrees, the filter has a reliable heading estimate and lever arm correction activates.
+
+### No new dependencies
+
+These topics use standard ROS 2 machinery. `GnssStatus` and `FilterHealth` are custom message types defined inside `fusioncore_ros` itself. No external visualization tool is required. Any tool that can subscribe to a ROS 2 topic can read them: `ros2 topic echo`, `rqt_plot`, PlotJuggler, Foxglove, or your own Python script.
 
 ---
 
