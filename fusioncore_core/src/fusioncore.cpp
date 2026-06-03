@@ -140,6 +140,12 @@ void FusionCore::init(const State& initial_state, double timestamp_seconds) {
   ukf_.set_position_noise_scale(1.0);
   ukf_.set_gyro_bias_noise_scale(1.0);
 
+  // Reset observability state
+  gnss_debug_                    = GnssFixDebug{};
+  last_gnss_innovation_norm_     = 0.0;
+  last_imu_innovation_norm_      = 0.0;
+  last_encoder_innovation_norm_  = 0.0;
+
   // Initialize adaptive noise matrices
   init_adaptive_R();
 }
@@ -167,6 +173,11 @@ void FusionCore::reset() {
   gnss_in_recovery_         = false;
   ukf_.set_position_noise_scale(1.0);
   ukf_.set_gyro_bias_noise_scale(1.0);
+
+  gnss_debug_                   = GnssFixDebug{};
+  last_gnss_innovation_norm_    = 0.0;
+  last_imu_innovation_norm_     = 0.0;
+  last_encoder_innovation_norm_ = 0.0;
 }
 
 void FusionCore::save_snapshot() {
@@ -407,6 +418,8 @@ void FusionCore::update_imu(
 
   auto innovation = ukf_.update<sensors::IMU_DIM>(z, sensors::imu_measurement_function, R);
 
+  last_imu_innovation_norm_ = innovation.norm();
+
   // Track innovation for adaptive noise estimation
   adapt_R<sensors::IMU_DIM>(R_imu_, R_imu_floor_, imu_innovations_, innovation, config_.adaptive_imu);
 
@@ -557,6 +570,8 @@ void FusionCore::update_encoder(
 
   auto innovation = ukf_.update<sensors::ENCODER_DIM>(z, sensors::encoder_measurement_function, R);
 
+  last_encoder_innovation_norm_ = innovation.norm();
+
   // Track innovation for adaptive noise estimation
   // Only adapt axes where message covariance was not provided
   if (var_vx <= 0.0 && var_vy <= 0.0 && var_wz <= 0.0) {
@@ -668,15 +683,36 @@ bool FusionCore::update_gnss(
   if (!initialized_)
     throw std::runtime_error("FusionCore: update_gnss() called before init()");
 
-  if (!fix.is_valid(config_.gnss)) return false;
+  // Always populate what we know from the fix before any gate check
+  gnss_debug_.hdop               = fix.hdop;
+  gnss_debug_.vdop               = fix.vdop;
+  gnss_debug_.satellites         = fix.satellites;
+  gnss_debug_.fix_type           = static_cast<int>(fix.fix_type);
+  gnss_debug_.chi2_threshold     = config_.outlier_threshold_gnss;
+  gnss_debug_.in_coast_mode      = gnss_in_coast_;
+  gnss_debug_.consecutive_rejects = gnss_consecutive_rejects_;
+  const StateMatrix& P_now = ukf_.state().P;
+  gnss_debug_.position_sigma_x   = std::sqrt(std::max(P_now(X, X), 0.0));
+  gnss_debug_.position_sigma_y   = std::sqrt(std::max(P_now(Y, Y), 0.0));
+
+  if (!fix.is_valid(config_.gnss)) {
+    gnss_debug_.accepted       = false;
+    gnss_debug_.mahalanobis_sq = -1.0;
+    if (fix.fix_type < config_.gnss.min_fix_type)
+      gnss_debug_.reason = GnssRejectionReason::FIX_TYPE_LOW;
+    else if (fix.hdop > config_.gnss.max_hdop)
+      gnss_debug_.reason = GnssRejectionReason::HDOP_HIGH;
+    else if (fix.vdop > config_.gnss.max_vdop)
+      gnss_debug_.reason = GnssRejectionReason::VDOP_HIGH;
+    else
+      gnss_debug_.reason = GnssRejectionReason::MIN_SATS;
+    return false;
+  }
 
   // Check if this measurement is delayed
   bool is_delayed = (last_timestamp_ - timestamp_seconds) > config_.min_dt;
 
   if (is_delayed) {
-    // apply_delayed_measurement rolls back state, calls the lambda, then
-    // replays IMU forward. Capture gnss_fused so we only count fusions that
-    // actually passed the outlier gate (apply_gnss_update returns bool).
     bool gnss_fused = false;
     double pre_update_speed_delayed = 0.0;
     bool applied = apply_delayed_measurement(timestamp_seconds, [&]() {
@@ -686,6 +722,10 @@ bool FusionCore::update_gnss(
         ukf_.state().x[VY] * ukf_.state().x[VY]);
       gnss_fused = apply_gnss_update(timestamp_seconds, fix);
     });
+    if (!applied) {
+      gnss_debug_.accepted = false;
+      gnss_debug_.reason   = GnssRejectionReason::DELAY_TOO_LARGE;
+    }
     if (!applied || !gnss_fused) return false;
     update_distance_traveled(fix.x, fix.y, pre_update_speed_delayed);
     last_gnss_time_ = timestamp_seconds;
@@ -694,8 +734,6 @@ bool FusionCore::update_gnss(
   }
 
   predict_to(timestamp_seconds);
-  // Fix 8: capture speed BEFORE gnss update: post-update velocity is corrected
-  // and not representative of motion during this GPS step.
   double pre_update_speed = std::sqrt(
     ukf_.state().x[VX] * ukf_.state().x[VX] +
     ukf_.state().x[VY] * ukf_.state().x[VY]);
@@ -749,19 +787,26 @@ bool FusionCore::apply_gnss_update(
     sensors::GnssPosMeasurement innovation_pre;
     sensors::GnssPosNoiseMatrix S;
     ukf_.predict_measurement<sensors::GNSS_POS_DIM>(z, h_gnss, R, innovation_pre, S);
-    if (is_outlier<sensors::GNSS_POS_DIM>(innovation_pre, S, config_.outlier_threshold_gnss)) {
+
+    // Compute Mahalanobis distance squared inline so it can be surfaced for observability.
+    // This avoids calling is_outlier() which would run a second LDLT internally.
+    double d2 = innovation_pre.dot(S.ldlt().solve(innovation_pre));
+    gnss_debug_.mahalanobis_sq = d2;
+
+    if (d2 > config_.outlier_threshold_gnss) {
       ++gnss_outliers_;
+      gnss_debug_.accepted = false;
+      gnss_debug_.reason   = GnssRejectionReason::CHI2_FAILED;
+
       if (config_.gnss_coast_n > 0) {
         ++gnss_consecutive_rejects_;
+        gnss_debug_.consecutive_rejects = gnss_consecutive_rejects_;
         if (gnss_consecutive_rejects_ >= config_.gnss_coast_n && !gnss_in_coast_) {
           gnss_in_coast_ = true;
+          gnss_debug_.in_coast_mode = true;
           ukf_.set_position_noise_scale(config_.gnss_coast_q_factor);
           ukf_.set_gyro_bias_noise_scale(config_.gnss_coast_q_bias_factor);
         }
-        // When coast Q inflation alone isn't enough (filter drifted before the
-        // cascade started), inflate P[x,x] and P[y,y] directly. This fires once
-        // (== not >=) so the gate opens on the next fix via a proper Bayesian
-        // update, not a hard reset. Cross-covariances are untouched.
         if (config_.gnss_recovery_rejection_n > 0 &&
             gnss_consecutive_rejects_ == config_.gnss_recovery_rejection_n) {
           double s2 = config_.gnss_p_inflate_sigma * config_.gnss_p_inflate_sigma;
@@ -770,6 +815,8 @@ bool FusionCore::apply_gnss_update(
       }
       return false;
     }
+  } else {
+    gnss_debug_.mahalanobis_sq = -1.0;
   }
 
   // GPS accepted normally: exit coast mode and reset counter
@@ -782,6 +829,13 @@ bool FusionCore::apply_gnss_update(
 
   Eigen::Matrix<double, sensors::GNSS_POS_DIM, 1> innovation =
     ukf_.update<sensors::GNSS_POS_DIM>(z, h_gnss, R);
+
+  // Update observability state for accepted fix
+  gnss_debug_.accepted           = true;
+  gnss_debug_.reason             = GnssRejectionReason::ACCEPTED;
+  gnss_debug_.in_coast_mode      = false;
+  gnss_debug_.consecutive_rejects = 0;
+  last_gnss_innovation_norm_     = innovation.norm();
 
   // Track innovation for adaptive GNSS noise estimation
   adapt_R<sensors::GNSS_POS_DIM>(R_gnss_, R_gnss_floor_, gnss_innovations_, innovation, config_.adaptive_gnss);
@@ -950,6 +1004,20 @@ FusionCoreStatus FusionCore::get_status() const {
   status.enc_outliers   = enc_outliers_;
   status.hdg_outliers   = hdg_outliers_;
   status.vslam_outliers = vslam_outliers_;
+
+  // Innovation norms from last accepted update per sensor
+  status.gnss_innovation_norm    = last_gnss_innovation_norm_;
+  status.imu_innovation_norm     = last_imu_innovation_norm_;
+  status.encoder_innovation_norm = last_encoder_innovation_norm_;
+
+  // Position 1-sigma from diagonal of P
+  status.position_sigma_x = std::sqrt(std::max(P(0, 0), 0.0));
+  status.position_sigma_y = std::sqrt(std::max(P(1, 1), 0.0));
+  status.position_sigma_z = std::sqrt(std::max(P(2, 2), 0.0));
+
+  // GPS coast mode
+  status.gnss_in_coast           = gnss_in_coast_;
+  status.gnss_consecutive_rejects = gnss_consecutive_rejects_;
 
   return status;
 }

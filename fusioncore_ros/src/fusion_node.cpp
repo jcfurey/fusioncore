@@ -24,6 +24,8 @@
 #include <diagnostic_msgs/msg/key_value.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include "fusioncore_ros/srv/from_ll.hpp"
+#include "fusioncore_ros/msg/gnss_status.hpp"
+#include "fusioncore_ros/msg/filter_health.hpp"
 #include <mutex>
 #include <optional>
 #include <set>
@@ -636,9 +638,11 @@ public:
         "Subscribed to dual antenna heading: %s", heading_topic_.c_str());
     }
 
-    odom_pub_  = create_publisher<nav_msgs::msg::Odometry>("/fusion/odom", 100);
-    pose_pub_  = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>("/fusion/pose", 100);
-    diag_pub_  = create_publisher<diagnostic_msgs::msg::DiagnosticArray>("/diagnostics", 10);
+    odom_pub_          = create_publisher<nav_msgs::msg::Odometry>("/fusion/odom", 100);
+    pose_pub_          = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>("/fusion/pose", 100);
+    diag_pub_          = create_publisher<diagnostic_msgs::msg::DiagnosticArray>("/diagnostics", 10);
+    gnss_status_pub_   = create_publisher<fusioncore_ros::msg::GnssStatus>("/fusion/debug/gnss_status", 10);
+    filter_health_pub_ = create_publisher<fusioncore_ros::msg::FilterHealth>("/fusion/debug/filter_health", 10);
 
     auto period = std::chrono::duration<double>(1.0 / publish_rate_);
     publish_timer_ = create_wall_timer(
@@ -836,6 +840,8 @@ public:
     odom_pub_.reset();
     pose_pub_.reset();
     diag_pub_.reset();
+    gnss_status_pub_.reset();
+    filter_health_pub_.reset();
     deinit_proj();
     RCLCPP_INFO(get_logger(), "FusionCore deactivated.");
     return CallbackReturn::SUCCESS;
@@ -1725,16 +1731,19 @@ private:
     }
 
     bool accepted = fc_->update_gnss(t, fix);
+    const auto& dbg = fc_->get_gnss_debug();
+
     if (!accepted) {
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
-        "GNSS fix rejected (fix_type=%d, min=%d, hdop=%.2f, "
-        "quality check or Mahalanobis gate)",
-        static_cast<int>(fix.fix_type),
-        static_cast<int>(min_fix_type_),
-        fix.hdop);
+        "GNSS fix rejected: %s (hdop=%.2f, d2=%.1f, threshold=%.1f)",
+        gnss_reason_str(dbg.reason).c_str(),
+        fix.hdop,
+        dbg.mahalanobis_sq,
+        dbg.chi2_threshold);
     }
 
-    // Log heading observability status
+    publish_gnss_status(rclcpp::Time(msg->header.stamp));
+
     auto fc_status = fc_->get_status();
     if (!fc_status.heading_validated) {
       RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000,
@@ -1894,14 +1903,18 @@ private:
     }
 
     bool accepted = fc_->update_gnss(t, fix);
+    const auto& dbg = fc_->get_gnss_debug();
+
     if (!accepted) {
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
-        "GPSFix rejected (fix_type=%d, min=%d, hdop=%.2f, "
-        "quality check or Mahalanobis gate)",
-        static_cast<int>(fix.fix_type),
-        static_cast<int>(min_fix_type_),
-        fix.hdop);
+        "GPSFix rejected: %s (hdop=%.2f, d2=%.1f, threshold=%.1f)",
+        gnss_reason_str(dbg.reason).c_str(),
+        fix.hdop,
+        dbg.mahalanobis_sq,
+        dbg.chi2_threshold);
     }
+
+    publish_gnss_status(rclcpp::Time(msg->header.stamp));
 
     auto fc_status = fc_->get_status();
     if (!fc_status.heading_validated) {
@@ -2036,6 +2049,80 @@ private:
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
         "Azimuth heading update rejected");
     }
+  }
+
+  // ─── Observability helpers ────────────────────────────────────────────────
+
+  // Converts a GnssRejectionReason enum to the string stored in the message.
+  static std::string gnss_reason_str(fusioncore::GnssRejectionReason r)
+  {
+    switch (r) {
+      case fusioncore::GnssRejectionReason::ACCEPTED:        return "ACCEPTED";
+      case fusioncore::GnssRejectionReason::FIX_TYPE_LOW:    return "FIX_TYPE_LOW";
+      case fusioncore::GnssRejectionReason::HDOP_HIGH:       return "HDOP_HIGH";
+      case fusioncore::GnssRejectionReason::VDOP_HIGH:       return "VDOP_HIGH";
+      case fusioncore::GnssRejectionReason::MIN_SATS:        return "MIN_SATS";
+      case fusioncore::GnssRejectionReason::CHI2_FAILED:     return "CHI2_FAILED";
+      case fusioncore::GnssRejectionReason::DELAY_TOO_LARGE: return "DELAY_TOO_LARGE";
+      default:                                                return "NOT_PROCESSED";
+    }
+  }
+
+  // Publishes /fusion/debug/gnss_status from the debug struct the core just populated.
+  // Called from gnss_callback and gps_fix_callback immediately after update_gnss().
+  void publish_gnss_status(const rclcpp::Time& stamp)
+  {
+    if (!gnss_status_pub_) return;
+    const auto& d = fc_->get_gnss_debug();
+
+    fusioncore_ros::msg::GnssStatus msg;
+    msg.header.stamp     = stamp;
+    msg.header.frame_id  = odom_frame_;
+    msg.accepted         = d.accepted;
+    msg.rejection_reason = gnss_reason_str(d.reason);
+    msg.mahalanobis_sq   = d.mahalanobis_sq;
+    msg.chi2_threshold   = d.chi2_threshold;
+    msg.hdop             = d.hdop;
+    msg.vdop             = d.vdop;
+    msg.satellites       = d.satellites;
+    msg.fix_type         = d.fix_type;
+    msg.in_coast_mode    = d.in_coast_mode;
+    msg.consecutive_rejects = d.consecutive_rejects;
+    msg.position_sigma_x = d.position_sigma_x;
+    msg.position_sigma_y = d.position_sigma_y;
+
+    gnss_status_pub_->publish(msg);
+  }
+
+  // Extracts heading 1-sigma in degrees from the filter covariance via quaternion Jacobian.
+  double compute_heading_sigma_deg(const fusioncore::State& s) const
+  {
+    const double qw = s.x[fusioncore::QW];
+    const double qx = s.x[fusioncore::QX];
+    const double qy = s.x[fusioncore::QY];
+    const double qz = s.x[fusioncore::QZ];
+
+    const double t3 = 2.0 * (qw*qz + qx*qy);
+    const double t4 = 1.0 - 2.0 * (qy*qy + qz*qz);
+    const double safe_denom_yaw = std::max(t3*t3 + t4*t4, 1e-12);
+
+    // d(yaw)/d(qw, qx, qy, qz): row 2 of the full quaternion-to-Euler Jacobian
+    Eigen::Matrix<double, 1, 4> J_yaw;
+    J_yaw(0,0) = 2.0*qz*t4 / safe_denom_yaw;
+    J_yaw(0,1) = 2.0*qy*t4 / safe_denom_yaw;
+    J_yaw(0,2) = (2.0*qx*t4 + 4.0*qy*t3) / safe_denom_yaw;
+    J_yaw(0,3) = (2.0*qw*t4 + 4.0*qz*t3) / safe_denom_yaw;
+
+    static constexpr int qi[4] = {
+      fusioncore::QW, fusioncore::QX, fusioncore::QY, fusioncore::QZ
+    };
+    Eigen::Matrix4d P_quat;
+    for (int i = 0; i < 4; ++i)
+      for (int j = 0; j < 4; ++j)
+        P_quat(i,j) = s.P(qi[i], qi[j]);
+
+    double yaw_var = (J_yaw * P_quat * J_yaw.transpose())(0, 0);
+    return std::sqrt(std::max(yaw_var, 0.0)) * 180.0 / M_PI;
   }
 
   // ─── Publish state ────────────────────────────────────────────────────────
@@ -2310,6 +2397,40 @@ private:
        {"update_count",          std::to_string(status.update_count)}}));
 
     diag_pub_->publish(diag_array);
+
+    // FilterHealth: plottable topic with innovation norms and position uncertainty.
+    // Consumed directly by Foxglove without a custom panel: every field is a float64.
+    if (filter_health_pub_) {
+      const fusioncore::State& s = fc_->get_state();
+
+      fusioncore_ros::msg::FilterHealth fh;
+      fh.header.stamp    = stamp;
+      fh.header.frame_id = odom_frame_;
+
+      fh.gnss_innovation_norm    = status.gnss_innovation_norm;
+      fh.imu_innovation_norm     = status.imu_innovation_norm;
+      fh.encoder_innovation_norm = status.encoder_innovation_norm;
+
+      fh.position_sigma_x = status.position_sigma_x;
+      fh.position_sigma_y = status.position_sigma_y;
+      fh.position_sigma_z = status.position_sigma_z;
+
+      fh.heading_sigma_deg = compute_heading_sigma_deg(s);
+
+      fh.heading_validated = status.heading_validated;
+      fh.heading_source    = heading_src_str(status.heading_source);
+
+      fh.gnss_in_coast           = status.gnss_in_coast;
+      fh.gnss_consecutive_rejects = status.gnss_consecutive_rejects;
+
+      fh.distance_traveled_m = status.distance_traveled;
+
+      fh.gnss_outlier_count    = status.gnss_outliers;
+      fh.imu_outlier_count     = status.imu_outliers;
+      fh.encoder_outlier_count = status.enc_outliers;
+
+      filter_health_pub_->publish(fh);
+    }
   }
 
   // ─── PROJ coordinate transforms ───────────────────────────────────────────
@@ -2439,6 +2560,8 @@ private:
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr                       odom_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr pose_pub_;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr         diag_pub_;
+  rclcpp::Publisher<fusioncore_ros::msg::GnssStatus>::SharedPtr               gnss_status_pub_;
+  rclcpp::Publisher<fusioncore_ros::msg::FilterHealth>::SharedPtr             filter_health_pub_;
   rclcpp::TimerBase::SharedPtr                                                publish_timer_;
   rclcpp::TimerBase::SharedPtr                                                diag_timer_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr                          reset_srv_;

@@ -20,6 +20,7 @@ find_package(eigen3_cmake_module REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(fusioncore_core REQUIRED)
 find_package(diagnostic_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(PROJ QUIET)
 if(NOT PROJ_FOUND)
@@ -36,7 +37,9 @@ find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/FromLL.srv"
-  DEPENDENCIES geographic_msgs geometry_msgs
+  "msg/GnssStatus.msg"
+  "msg/FilterHealth.msg"
+  DEPENDENCIES geographic_msgs geometry_msgs std_msgs
 )
 
 add_executable(fusioncore_node
@@ -65,6 +68,7 @@ ament_target_dependencies(fusioncore_node
   fusioncore_core
   compass_msgs
   diagnostic_msgs
+  std_msgs
   std_srvs
 )
 

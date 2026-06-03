@@ -191,6 +191,35 @@ enum class HeadingSource {
   GPS_TRACK      = 3,  // robot moved enough for heading to be geometric
 };
 
+// Why a GNSS fix was rejected (or ACCEPTED if it passed)
+enum class GnssRejectionReason {
+  NOT_PROCESSED   = 0,  // update_gnss not yet called
+  ACCEPTED        = 1,
+  FIX_TYPE_LOW    = 2,  // fix_type < min_fix_type
+  HDOP_HIGH       = 3,  // hdop > max_hdop
+  VDOP_HIGH       = 4,  // vdop > max_vdop
+  MIN_SATS        = 5,  // satellites < min_satellites
+  CHI2_FAILED     = 6,  // Mahalanobis distance > threshold
+  DELAY_TOO_LARGE = 7,  // measurement older than max_measurement_delay
+};
+
+// Per-fix observability data: populated by update_gnss() on every call.
+// Retrieve via get_gnss_debug() after update_gnss() returns.
+struct GnssFixDebug {
+  bool               accepted           = false;
+  GnssRejectionReason reason            = GnssRejectionReason::NOT_PROCESSED;
+  double             mahalanobis_sq     = -1.0;  // -1 = not computed (quality gate failed first)
+  double             chi2_threshold     = 0.0;
+  double             hdop               = 0.0;
+  double             vdop               = 0.0;
+  int                satellites         = 0;
+  int                fix_type           = 0;
+  bool               in_coast_mode      = false;
+  int                consecutive_rejects = 0;
+  double             position_sigma_x   = 0.0;
+  double             position_sigma_y   = 0.0;
+};
+
 enum class SensorHealth {
   OK,
   STALE,
@@ -205,10 +234,10 @@ struct FusionCoreStatus {
   double       position_uncertainty = 0.0;
   int          update_count         = 0;
 
-  // Heading observability: the real fix for peci1's concern
+  // Heading observability
   bool          heading_validated   = false;
   HeadingSource heading_source      = HeadingSource::NONE;
-  double        distance_traveled   = 0.0;  // meters since init
+  double        distance_traveled   = 0.0;
 
   // Outlier rejection counters: cumulative since init()
   int gnss_outliers  = 0;
@@ -218,6 +247,21 @@ struct FusionCoreStatus {
   int vslam_outliers = 0;
 
   SensorHealth vslam_health = SensorHealth::NOT_INIT;
+
+  // Innovation norms: magnitude of the last accepted measurement residual.
+  // Zero until the first accepted update from that sensor.
+  double gnss_innovation_norm    = 0.0;
+  double imu_innovation_norm     = 0.0;
+  double encoder_innovation_norm = 0.0;
+
+  // Position 1-sigma uncertainty from the filter covariance (meters).
+  double position_sigma_x = 0.0;
+  double position_sigma_y = 0.0;
+  double position_sigma_z = 0.0;
+
+  // GPS coast mode state
+  bool gnss_in_coast           = false;
+  int  gnss_consecutive_rejects = 0;
 };
 
 class FusionCore {
@@ -285,8 +329,9 @@ public:
     const sensors::GnssHeading& heading
   );
 
-  const State&       get_state()  const;
-  FusionCoreStatus   get_status() const;
+  const State&       get_state()      const;
+  FusionCoreStatus   get_status()     const;
+  const GnssFixDebug& get_gnss_debug() const { return gnss_debug_; }
   void               reset();
   bool               is_initialized()    const { return initialized_; }
   bool               is_heading_valid()  const { return heading_validated_; }
@@ -381,6 +426,14 @@ private:
   int enc_outliers_    = 0;
   int hdg_outliers_    = 0;
   int vslam_outliers_  = 0;
+
+  // Per-fix observability: updated on every update_gnss() call
+  GnssFixDebug gnss_debug_;
+
+  // Last accepted innovation norms per sensor: updated on each accepted update
+  double last_gnss_innovation_norm_    = 0.0;
+  double last_imu_innovation_norm_     = 0.0;
+  double last_encoder_innovation_norm_ = 0.0;
 
   // Inertial coast mode tracking
   int  gnss_consecutive_rejects_ = 0;

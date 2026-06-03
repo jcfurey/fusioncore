@@ -227,6 +227,180 @@ TEST(GNSSManagerTest, PInflationBreaksCascadeLoop) {
   EXPECT_LT(fc.get_state().x[X], 50.0) << "Position should not overshoot";
 }
 
+// ─── Observability tests ─────────────────────────────────────────────────────
+
+// Shared setup: initialized filter at origin with large initial P
+static FusionCore make_initialized_fc()
+{
+  FusionCoreConfig cfg;
+  cfg.outlier_rejection = true;
+  cfg.adaptive_gnss     = false;
+  FusionCore fc(cfg);
+  State s;
+  s.x = StateVector::Zero();
+  s.P = StateMatrix::Identity() * 100.0;
+  fc.init(s, 0.0);
+  return fc;
+}
+
+static GnssFix make_good_fix(double x = 0.0, double y = 0.0, double z = 0.0)
+{
+  GnssFix f;
+  f.fix_type   = GnssFixType::GPS_FIX;
+  f.satellites = 8;
+  f.hdop       = 1.2;
+  f.vdop       = 1.8;
+  f.x = x; f.y = y; f.z = z;
+  return f;
+}
+
+// Test 8: HDOP gate failure populates debug with correct reason; chi2 not computed
+TEST(GNSSObservabilityTest, HdopRejectionReason)
+{
+  auto fc = make_initialized_fc();
+
+  GnssFix fix = make_good_fix();
+  fix.hdop = 8.0;  // exceeds default max_hdop=4.0
+
+  bool accepted = fc.update_gnss(0.1, fix);
+  EXPECT_FALSE(accepted);
+
+  const auto& d = fc.get_gnss_debug();
+  EXPECT_FALSE(d.accepted);
+  EXPECT_EQ(d.reason, GnssRejectionReason::HDOP_HIGH);
+  EXPECT_DOUBLE_EQ(d.mahalanobis_sq, -1.0) << "chi2 should not be computed when quality gate fails";
+  EXPECT_NEAR(d.hdop, 8.0, 1e-9);
+}
+
+// Test 9: fix_type gate failure reports FIX_TYPE_LOW
+TEST(GNSSObservabilityTest, FixTypeRejectionReason)
+{
+  FusionCoreConfig cfg;
+  cfg.gnss.min_fix_type = GnssFixType::RTK_FIXED;
+  FusionCore fc(cfg);
+  State s;
+  s.x = StateVector::Zero();
+  s.P = StateMatrix::Identity() * 0.1;
+  fc.init(s, 0.0);
+
+  GnssFix fix = make_good_fix();
+  fix.fix_type = GnssFixType::GPS_FIX;  // below RTK_FIXED threshold
+
+  EXPECT_FALSE(fc.update_gnss(0.1, fix));
+  EXPECT_EQ(fc.get_gnss_debug().reason, GnssRejectionReason::FIX_TYPE_LOW);
+  EXPECT_DOUBLE_EQ(fc.get_gnss_debug().mahalanobis_sq, -1.0);
+}
+
+// Test 10: chi2 rejection populates mahalanobis_sq > threshold
+TEST(GNSSObservabilityTest, Chi2RejectionPopulatesDistance)
+{
+  FusionCoreConfig cfg;
+  cfg.outlier_rejection = true;
+  cfg.adaptive_gnss     = false;
+  FusionCore fc(cfg);
+
+  // Tight initial covariance so a 200m fix is a large Mahalanobis outlier
+  State s;
+  s.x = StateVector::Zero();
+  s.P = StateMatrix::Identity() * 0.01;
+  fc.init(s, 0.0);
+
+  GnssFix fix = make_good_fix(200.0, 0.0, 0.0);  // 200m from origin
+
+  bool accepted = fc.update_gnss(0.1, fix);
+  EXPECT_FALSE(accepted);
+
+  const auto& d = fc.get_gnss_debug();
+  EXPECT_FALSE(d.accepted);
+  EXPECT_EQ(d.reason, GnssRejectionReason::CHI2_FAILED);
+  EXPECT_GT(d.mahalanobis_sq, d.chi2_threshold) << "d2 must exceed threshold to be rejected";
+  EXPECT_NEAR(d.chi2_threshold, 16.27, 0.01);
+}
+
+// Test 11: accepted fix populates debug correctly
+TEST(GNSSObservabilityTest, AcceptedFixPopulatesDebug)
+{
+  auto fc = make_initialized_fc();
+
+  GnssFix fix = make_good_fix(1.0, 0.0, 0.0);
+  bool accepted = fc.update_gnss(0.1, fix);
+  EXPECT_TRUE(accepted);
+
+  const auto& d = fc.get_gnss_debug();
+  EXPECT_TRUE(d.accepted);
+  EXPECT_EQ(d.reason, GnssRejectionReason::ACCEPTED);
+  EXPECT_LT(d.mahalanobis_sq, d.chi2_threshold) << "accepted fix must have d2 < threshold";
+  EXPECT_GE(d.mahalanobis_sq, 0.0);
+  EXPECT_NEAR(d.hdop, 1.2, 1e-9);
+  EXPECT_EQ(d.satellites, 8);
+  EXPECT_EQ(d.fix_type, static_cast<int>(GnssFixType::GPS_FIX));
+  EXPECT_FALSE(d.in_coast_mode);
+  EXPECT_GT(d.position_sigma_x, 0.0);
+  EXPECT_GT(d.position_sigma_y, 0.0);
+}
+
+// Test 12: innovation norms are non-negative and non-zero after fusion
+TEST(GNSSObservabilityTest, InnovationNormsPlausible)
+{
+  auto fc = make_initialized_fc();
+
+  // Drive some IMU and encoder updates first
+  for (int i = 1; i <= 10; ++i) {
+    fc.update_imu(i * 0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 9.81);
+    fc.update_encoder(i * 0.01, 1.0, 0.0, 0.0);
+  }
+
+  fc.update_gnss(0.11, make_good_fix(0.1, 0.0, 0.0));
+
+  auto status = fc.get_status();
+  EXPECT_GE(status.gnss_innovation_norm,    0.0);
+  EXPECT_GE(status.imu_innovation_norm,     0.0);
+  EXPECT_GE(status.encoder_innovation_norm, 0.0);
+  // After real sensor updates the norms must be positive
+  EXPECT_GT(status.imu_innovation_norm,     0.0);
+  EXPECT_GT(status.encoder_innovation_norm, 0.0);
+}
+
+// Test 13: position sigma in status matches sqrt of P diagonal
+TEST(GNSSObservabilityTest, PositionSigmaMatchesPDiagonal)
+{
+  auto fc = make_initialized_fc();
+
+  auto status = fc.get_status();
+  const auto& P = fc.get_state().P;
+
+  EXPECT_NEAR(status.position_sigma_x, std::sqrt(P(0,0)), 1e-9);
+  EXPECT_NEAR(status.position_sigma_y, std::sqrt(P(1,1)), 1e-9);
+  EXPECT_NEAR(status.position_sigma_z, std::sqrt(P(2,2)), 1e-9);
+}
+
+// Test 14: coast mode state is reflected in debug and status
+TEST(GNSSObservabilityTest, CoastModeReflectedInDebug)
+{
+  FusionCoreConfig cfg;
+  cfg.gnss_coast_n      = 2;
+  cfg.outlier_rejection = true;
+  cfg.adaptive_gnss     = false;
+  FusionCore fc(cfg);
+  State s;
+  s.x = StateVector::Zero();
+  s.P = StateMatrix::Identity() * 0.01;
+  fc.init(s, 0.0);
+
+  // Three consecutive rejections (200m outlier) to trigger coast mode (coast_n=2)
+  GnssFix spike = make_good_fix(200.0, 0.0, 0.0);
+  for (int i = 0; i < 3; ++i)
+    fc.update_gnss(0.1 * (i + 1), spike);
+
+  const auto& d = fc.get_gnss_debug();
+  EXPECT_TRUE(d.in_coast_mode);
+  EXPECT_GE(d.consecutive_rejects, 2);
+
+  auto status = fc.get_status();
+  EXPECT_TRUE(status.gnss_in_coast);
+  EXPECT_GE(status.gnss_consecutive_rejects, 2);
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
