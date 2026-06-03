@@ -25,6 +25,8 @@ fusioncore:
     publish_rate: 100.0
     publish.force_2d: true          # ground robot
 
+    motion_model: "DifferentialDrive"  # differential drive: no lateral sliding
+
     # ── IMU: Bosch BNO085 ─────────────────────────────────────────────────────
     # The BNO085 has an onboard magnetometer, but magnetic interference from
     # motors and wiring makes it unreliable on most robot platforms. Leave
@@ -85,6 +87,10 @@ fusioncore:
     ukf.q_acceleration: 1.0
     ukf.q_gyro_bias: 1.0e-5
     ukf.q_accel_bias: 1.0e-5
+    ukf.q_encoder_wz_bias: 1.0e-7
+
+    outlier_threshold_vslam: 22.46
+    adaptive.ground_constraint: true
 
     input.gnss_crs: "EPSG:4326"
     output.crs: "EPSG:4978"

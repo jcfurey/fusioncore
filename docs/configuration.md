@@ -195,6 +195,25 @@ fusioncore:
     # Maximum heading uncertainty to allow a fusion (radians). Computed as
     # gps_noise / displacement. 0.4 rad = 23 degrees.
 
+    gnss.track_heading_min_speed: 0.2
+    # Minimum robot speed (m/s) for GPS displacement steps to count toward
+    # heading observability. Below this: could be GPS jitter, not real motion.
+    # Increase on high-vibration platforms (construction equipment, tracked robots).
+
+    gnss.track_heading_max_yaw_rate: 0.3
+    # Maximum yaw rate (rad/s) for displacement steps to count. During fast turns
+    # the bearing changes too quickly for a reliable heading measurement.
+    # Decrease for robots that make tight turns at slow speed.
+
+    # ── Lever arm heading gating ──────────────────────────────────────────────
+    gnss.lever_arm_max_heading_sigma_deg: 20.0
+    # Lever arm correction is only applied when heading uncertainty is below this.
+    # When heading degrades (e.g. during prolonged turns), rotating the lever arm
+    # by an uncertain heading adds more position error than it removes.
+    # Default 20 deg disables lever arm during tight-turn sections while leaving
+    # it active during straight/gentle-curve driving where it genuinely helps.
+    # Rule of thumb: lever_arm_m * sin(threshold_rad) should be < GPS noise sigma.
+
     # ── Outlier rejection ─────────────────────────────────────────────────────
     outlier_rejection: true
     outlier_threshold_gnss: 16.27   # chi2(3, 0.999): 3D GPS position
@@ -208,36 +227,6 @@ fusioncore:
     # this gate rejects those jumps automatically when covariance is calibrated.
     # Do NOT lower these below chi2 critical values. At 7.0 normal GPS noise
     # trips the gate and every fix gets rejected.
-
-    # ── VSLAM (visual SLAM pose input) ───────────────────────────────────────
-    # FusionCore accepts 6-DOF pose from any VSLAM system that publishes
-    # nav_msgs/Odometry (ORB-SLAM3, RTAB-Map, Kimera, OpenVINS, etc.).
-    # Only pose.pose and pose.covariance are used; twist is ignored.
-    # See docs/hardware/vslam-imu.md for setup details.
-    vslam.topic: ""              # e.g. "/vslam/odometry" or "/orbslam3/camera/odometry"
-                                 # Leave empty to disable VSLAM input.
-    vslam.position_noise: 0.1   # m: fallback when message covariance is zero
-    vslam.orientation_noise: 0.02  # rad: fallback when message covariance is zero
-    vslam.frame_id: ""           # override VSLAM TF frame. Leave empty to use msg header.
-    vslam.reinit_n: 10           # consecutive gate rejections before re-anchoring map origin
-    # FusionCore tracks the offset between the VSLAM map frame and the filter's odom
-    # frame. When VSLAM reinitializes after tracking loss, its pose jumps to a new
-    # map origin. The chi-squared gate rejects these jumps. After vslam.reinit_n
-    # consecutive rejections, FusionCore assumes reinitialization occurred and
-    # re-anchors the map origin to the filter's current position, restoring fusion.
-
-    # ── GPS coast mode (cascade rejection recovery) ───────────────────────────
-    gnss.coast_n: 5              # consecutive rejections before entering coast mode
-    gnss.coast_q_factor: 20.0   # process noise multiplier while coasting (inflates P)
-    gnss.degraded_noise_multiplier: 3.0
-    # After gnss.coast_n consecutive GPS outliers, the filter enters coast mode.
-    # In coast mode: (1) P is inflated by coast_q_factor each step so the filter
-    # stays open to correction, (2) the next fix is tested against a gate inflated
-    # by degraded_noise_multiplier, giving it a wider acceptance window.
-    # This breaks the cascade rejection loop where a stationary or slowly-drifting
-    # filter keeps rejecting valid fixes because its covariance is too tight.
-    # Increase coast_n if you want more patience before relaxing; increase
-    # degraded_noise_multiplier if large GPS jumps should still be accepted.
 
     # ── Adaptive noise ────────────────────────────────────────────────────────
     adaptive.imu: true
@@ -307,34 +296,6 @@ fusioncore:
     # Workflow: replay a bag to a known-good point → save → tweak params →
     #   load (instant, no re-replay) → observe the problem window.
 
-    # ── Ground constraint ─────────────────────────────────────────────────────
-    # FusionCore always fuses VZ=0 and AZ=0 on every encoder callback.
-    # These are unconditional for wheeled ground robots and cannot be disabled.
-    #
-    # The optional Z position constraint targets a different problem: GPS
-    # altitude noise (typically 3-5m std dev) causing the filter's Z position
-    # to oscillate on flat terrain. When enabled, it fuses Z=0 as a position
-    # pseudo-measurement tighter than GPS altitude noise, keeping the filter
-    # anchored to the ground.
-    #
-    # 0.0 = disabled (default, correct for 3D outdoor operation or unknown terrain)
-    # 0.3 = flat terrain mode: campus paths, parking lots, warehouse floors
-    ground_constraint.z_position_sigma: 0.0
-
-    # ── ZUPT ──────────────────────────────────────────────────────────────────
-    zupt.enabled: true
-    zupt.velocity_threshold: 0.05   # m/s: encoder speed below this → stationary
-    zupt.angular_threshold: 0.05    # rad/s: angular rate below this → not rotating
-    zupt.noise_sigma: 0.01          # m/s: tighter = stronger zero-velocity correction
-
-    # ── GPS coordinate system ─────────────────────────────────────────────────
-    input.gnss_crs: "EPSG:4326"              # WGS84 lat/lon (standard GPS)
-    output.crs: "EPSG:4978"                  # ECEF XYZ (globally valid default)
-    output.convert_to_enu_at_reference: true # required when output.crs is ECEF
-    reference.use_first_fix: true            # map origin = first GPS fix
-    reference.x: 0.0                         # fixed origin (when use_first_fix: false)
-    reference.y: 0.0
-    reference.z: 0.0
 ```
 
 ---

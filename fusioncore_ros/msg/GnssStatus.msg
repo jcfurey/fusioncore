@@ -25,3 +25,7 @@ int32 consecutive_rejects
 # Filter position 1-sigma at the time of this fix (meters)
 float64 position_sigma_x
 float64 position_sigma_y
+
+# Lever arm observability at the time of this fix
+bool    lever_arm_used      # true if lever arm correction was applied
+float64 heading_sigma_deg   # heading 1-sigma (degrees) used to decide lever arm eligibility

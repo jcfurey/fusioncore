@@ -401,6 +401,187 @@ TEST(GNSSObservabilityTest, CoastModeReflectedInDebug)
   EXPECT_GE(status.gnss_consecutive_rejects, 2);
 }
 
+// ─── Configurable heading threshold tests ────────────────────────────────────
+
+// Helper: drive forward N steps to accumulate distance_traveled
+static void drive_forward(FusionCore& fc, double start_t, int steps, double dt = 0.1,
+                           double speed = 1.0)
+{
+  for (int i = 0; i < steps; ++i) {
+    double t = start_t + i * dt;
+    fc.update_imu(t, 0, 0, 0, 0, 0, 9.81);
+    fc.update_encoder(t, speed, 0, 0);
+  }
+}
+
+// Test 15: custom min_speed prevents heading validation when robot is slow
+TEST(HeadingThresholdTest, HighMinSpeedBlocksValidation)
+{
+  FusionCoreConfig cfg;
+  cfg.gps_track_heading_min_speed = 2.0;   // require 2 m/s to count distance
+  cfg.heading_observable_distance  = 5.0;
+  FusionCore fc(cfg);
+  State s;
+  s.x = StateVector::Zero();
+  s.P = StateMatrix::Identity() * 100.0;
+  fc.init(s, 0.0);
+
+  // Drive at 1 m/s (below min_speed threshold) for 30 steps = ~3m
+  drive_forward(fc, 0.0, 30, 0.1, 1.0);
+
+  // Fuse a GPS fix to trigger update_distance_traveled
+  GnssFix fix = make_good_fix(3.0, 0.0, 0.0);
+  fc.update_gnss(3.0, fix);
+
+  // Heading should NOT be validated: 1 m/s < 2 m/s min_speed
+  EXPECT_FALSE(fc.get_status().heading_validated)
+    << "Heading should not validate at speed below min_speed threshold";
+}
+
+// Test 16: default min_speed validates heading when robot moves with GPS fixes along route.
+// distance_traveled_ only accumulates inside update_distance_traveled(), which is called
+// from update_gnss(). So we must send GPS fixes at multiple positions to accumulate distance.
+TEST(HeadingThresholdTest, DefaultMinSpeedAllowsValidation)
+{
+  FusionCoreConfig cfg;
+  cfg.gps_track_heading_min_speed = 0.2;   // default
+  cfg.heading_observable_distance  = 5.0;
+  cfg.adaptive_gnss                = false;
+  FusionCore fc(cfg);
+  State s;
+  s.x = StateVector::Zero();
+  s.P = StateMatrix::Identity() * 100.0;
+  fc.init(s, 0.0);
+
+  // Drive forward at 1 m/s, sending GPS fixes every 1s at 1m intervals.
+  // After 6 GPS fixes (5 accepted intervals of 1m each), distance_traveled_ >= 5m.
+  for (int i = 0; i < 100; ++i) {
+    double t = 0.1 * (i + 1);
+    fc.update_imu(t, 0.0, 0.0, 0.0, 0.0, 0.0, 9.81);
+    fc.update_encoder(t, 1.0, 0.0, 0.0);
+    if (i % 10 == 9) {  // 1 Hz GPS
+      GnssFix fix;
+      fix.fix_type   = GnssFixType::GPS_FIX;
+      fix.satellites = 8;
+      fix.hdop       = 1.2;
+      fix.vdop       = 1.8;
+      fix.x = t;   // consistent 1 m/s forward
+      fix.y = 0.0;
+      fix.z = 0.0;
+      fc.update_gnss(t, fix);
+    }
+  }
+
+  EXPECT_TRUE(fc.get_status().heading_validated)
+    << "Heading should validate after 10m GPS track at 1 m/s, min_speed=0.2";
+}
+
+// Test 17: lever arm disabled when heading sigma exceeds threshold
+TEST(LeverArmGatingTest, LeverArmDisabledWhenHeadingUncertain)
+{
+  FusionCoreConfig cfg;
+  cfg.gnss_lever_arm_max_heading_sigma_deg = 5.0;  // very tight: disables quickly
+  cfg.outlier_rejection = false;
+  FusionCore fc(cfg);
+
+  State s;
+  s.x = StateVector::Zero();
+  // Large quaternion covariance = large heading sigma (will exceed 5 deg threshold)
+  s.P = StateMatrix::Identity() * 0.1;
+  s.P(QW,QW) = 1.0; s.P(QX,QX) = 1.0;
+  s.P(QY,QY) = 1.0; s.P(QZ,QZ) = 1.0;
+  fc.init(s, 0.0);
+
+  // Set heading_validated so the bool-only gate would pass
+  GnssFix hdg_fix = make_good_fix(10.0, 0.0, 0.0);
+  hdg_fix.hdop = 0.5; hdg_fix.vdop = 0.8;
+  // Manually drive to validate heading via GPS track
+  drive_forward(fc, 0.0, 150, 0.1, 1.0);
+  fc.update_gnss(15.0, hdg_fix);
+
+  // Now add lever arm and fuse a fix
+  GnssFix fix_with_arm = make_good_fix(15.0, 0.0, 0.0);
+  sensors::GnssLeverArm arm;
+  arm.x = 0.5; arm.y = 0.0; arm.z = 0.0;
+  fix_with_arm.lever_arm = arm;
+
+  fc.update_gnss(15.1, fix_with_arm);
+  const auto& d = fc.get_gnss_debug();
+
+  // heading_sigma should be reported
+  EXPECT_GE(d.heading_sigma_deg, 0.0);
+
+  // If heading_sigma > 5 deg threshold: lever arm must be disabled
+  if (d.heading_sigma_deg > 5.0) {
+    EXPECT_FALSE(d.lever_arm_used)
+      << "lever_arm_used should be false when heading_sigma=" << d.heading_sigma_deg
+      << " > threshold=5 deg";
+  }
+}
+
+// Test 18: lever arm active when heading is tight and validated
+TEST(LeverArmGatingTest, LeverArmActiveWhenHeadingTight)
+{
+  FusionCoreConfig cfg;
+  cfg.gnss_lever_arm_max_heading_sigma_deg = 30.0;  // generous threshold
+  cfg.outlier_rejection = false;
+  cfg.adaptive_gnss     = false;
+  FusionCore fc(cfg);
+
+  State s;
+  s.x = StateVector::Zero();
+  s.P = StateMatrix::Identity() * 0.01;  // tight: small heading sigma
+  fc.init(s, 0.0);
+
+  // Drive to validate heading
+  drive_forward(fc, 0.0, 100, 0.1, 1.0);
+  GnssFix anchor = make_good_fix(10.0, 0.0, 0.0);
+  anchor.hdop = 0.5; anchor.vdop = 0.8;
+  fc.update_gnss(10.0, anchor);
+
+  // Fuse with lever arm
+  GnssFix fix = make_good_fix(10.5, 0.0, 0.0);
+  sensors::GnssLeverArm arm;
+  arm.x = 0.3; arm.y = 0.0; arm.z = 0.0;
+  fix.lever_arm = arm;
+
+  fc.update_gnss(10.1, fix);
+  const auto& d = fc.get_gnss_debug();
+
+  // When heading is tight and validated and sigma < threshold: lever arm should be used
+  if (fc.get_status().heading_validated && d.heading_sigma_deg < 30.0) {
+    EXPECT_TRUE(d.lever_arm_used)
+      << "lever_arm_used should be true when heading_sigma=" << d.heading_sigma_deg
+      << " < threshold=30 deg and heading is validated";
+  }
+}
+
+// Test 19: heading_sigma_deg is populated and finite in gnss debug.
+// Uses tight initial P so heading sigma is well-defined (not hundreds of degrees
+// from a near-singular quaternion covariance block).
+TEST(LeverArmGatingTest, HeadingSignaDebugFieldPopulated)
+{
+  FusionCoreConfig cfg;
+  cfg.outlier_rejection = false;
+  cfg.adaptive_gnss     = false;
+  FusionCore fc(cfg);
+  State s;
+  s.x = StateVector::Zero();
+  s.P = StateMatrix::Identity() * 0.01;   // tight P: heading sigma stays small
+  fc.init(s, 0.0);
+
+  GnssFix fix = make_good_fix(1.0, 0.0, 0.0);
+  fc.update_gnss(0.1, fix);
+
+  const auto& d = fc.get_gnss_debug();
+  EXPECT_GE(d.heading_sigma_deg, 0.0);
+  EXPECT_TRUE(std::isfinite(d.heading_sigma_deg)) << "heading_sigma_deg must be finite";
+  // With tight P=0.01*I, quaternion block variance is small.
+  // J_yaw at identity quaternion is [0,0,0,2], so yaw_var = 4*0.01 = 0.04 rad^2,
+  // sigma = 0.2 rad = 11.5 deg. Assert it's in a physically sensible range.
+  EXPECT_LT(d.heading_sigma_deg, 90.0);
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

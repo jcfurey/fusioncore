@@ -291,6 +291,31 @@ bool FusionCore::apply_delayed_measurement(
   return true;
 }
 
+double FusionCore::compute_heading_sigma_rad() const {
+  const State& s = ukf_.state();
+  const double qw = s.x[QW], qx = s.x[QX], qy = s.x[QY], qz = s.x[QZ];
+
+  // d(yaw)/d(qw,qx,qy,qz): row 2 of the quaternion-to-Euler Jacobian
+  const double t3 = 2.0 * (qw*qz + qx*qy);
+  const double t4 = 1.0 - 2.0 * (qy*qy + qz*qz);
+  const double safe_denom = std::max(t3*t3 + t4*t4, 1e-12);
+
+  Eigen::Matrix<double, 1, 4> J;
+  J(0,0) = 2.0*qz*t4 / safe_denom;
+  J(0,1) = 2.0*qy*t4 / safe_denom;
+  J(0,2) = (2.0*qx*t4 + 4.0*qy*t3) / safe_denom;
+  J(0,3) = (2.0*qw*t4 + 4.0*qz*t3) / safe_denom;
+
+  static constexpr int qi[4] = {QW, QX, QY, QZ};
+  Eigen::Matrix4d P_quat;
+  for (int i = 0; i < 4; ++i)
+    for (int j = 0; j < 4; ++j)
+      P_quat(i,j) = s.P(qi[i], qi[j]);
+
+  double yaw_var = (J * P_quat * J.transpose())(0,0);
+  return std::sqrt(std::max(yaw_var, 0.0));
+}
+
 void FusionCore::predict_to(double timestamp_seconds) {
   // Enter coast mode on GPS timeout: receiver went silent (mode=2, tunnel,
   // power loss) rather than publishing rejectable fixes. Consecutive-reject
@@ -354,15 +379,10 @@ void FusionCore::update_distance_traveled(double x, double y, double pre_update_
     : std::sqrt(ukf_.state().x[VX] * ukf_.state().x[VX] +
                 ukf_.state().x[VY] * ukf_.state().x[VY]);
 
-  // Minimum forward speed to count as real motion
-  // Below this threshold: could be GPS jitter, spinning in place, or sliding
-  const double MIN_SPEED = 0.2;  // m/s
-
-  // Maximum yaw rate: if spinning fast, heading is not observable from track
-  const double MAX_YAW_RATE = 0.3;  // rad/s (~17 deg/s)
   double yaw_rate = std::abs(ukf_.state().x[WZ]);
 
-  bool motion_is_valid = (state_speed >= MIN_SPEED) && (yaw_rate <= MAX_YAW_RATE);
+  bool motion_is_valid = (state_speed >= config_.gps_track_heading_min_speed) &&
+                         (yaw_rate    <= config_.gps_track_heading_max_yaw_rate);
 
   if (motion_is_valid) {
     distance_traveled_ += dist;
@@ -776,7 +796,14 @@ bool FusionCore::apply_gnss_update(
       R(i,i) = std::max(R(i,i), R_gnss_(i,i));
   }
 
-  bool use_lever_arm = !fix.lever_arm.is_zero() && heading_validated_;
+  double heading_sigma_rad = compute_heading_sigma_rad();
+  double heading_sigma_deg = heading_sigma_rad * 180.0 / M_PI;
+  gnss_debug_.heading_sigma_deg = heading_sigma_deg;
+
+  bool heading_reliable = heading_validated_ &&
+    (heading_sigma_deg <= config_.gnss_lever_arm_max_heading_sigma_deg);
+  bool use_lever_arm = !fix.lever_arm.is_zero() && heading_reliable;
+  gnss_debug_.lever_arm_used = use_lever_arm;
 
   auto h_gnss = use_lever_arm
     ? sensors::gnss_pos_measurement_function_with_lever_arm(fix.lever_arm)

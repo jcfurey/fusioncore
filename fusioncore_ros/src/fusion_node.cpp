@@ -212,6 +212,9 @@ public:
     declare_parameter("gnss.track_heading_enabled",   true);
     declare_parameter("gnss.track_heading_min_dist",  5.0);
     declare_parameter("gnss.track_heading_max_sigma", 0.4);
+    declare_parameter("gnss.track_heading_min_speed",    0.2);
+    declare_parameter("gnss.track_heading_max_yaw_rate", 0.3);
+    declare_parameter("gnss.lever_arm_max_heading_sigma_deg", 20.0);
 
     declare_parameter("adaptive.imu",               true);
     declare_parameter("adaptive.encoder",           true);
@@ -412,9 +415,13 @@ public:
     config.gnss_recovery_rejection_n  = get_parameter("gnss.recovery_rejection_n").as_int();
     config.gnss_p_inflate_sigma       = get_parameter("gnss.p_inflate_sigma").as_double();
     config.gnss_recovery_timeout_s    = get_parameter("gnss.recovery_timeout_s").as_double();
-    config.gps_track_heading_enabled   = get_parameter("gnss.track_heading_enabled").as_bool();
-    config.gps_track_heading_min_dist  = get_parameter("gnss.track_heading_min_dist").as_double();
-    config.gps_track_heading_max_sigma = get_parameter("gnss.track_heading_max_sigma").as_double();
+    config.gps_track_heading_enabled       = get_parameter("gnss.track_heading_enabled").as_bool();
+    config.gps_track_heading_min_dist      = get_parameter("gnss.track_heading_min_dist").as_double();
+    config.gps_track_heading_max_sigma     = get_parameter("gnss.track_heading_max_sigma").as_double();
+    config.gps_track_heading_min_speed     = get_parameter("gnss.track_heading_min_speed").as_double();
+    config.gps_track_heading_max_yaw_rate  = get_parameter("gnss.track_heading_max_yaw_rate").as_double();
+    config.gnss_lever_arm_max_heading_sigma_deg =
+      get_parameter("gnss.lever_arm_max_heading_sigma_deg").as_double();
 
     config.adaptive_imu               = get_parameter("adaptive.imu").as_bool();
     config.adaptive_encoder           = get_parameter("adaptive.encoder").as_bool();
@@ -2090,6 +2097,8 @@ private:
     msg.consecutive_rejects = d.consecutive_rejects;
     msg.position_sigma_x = d.position_sigma_x;
     msg.position_sigma_y = d.position_sigma_y;
+    msg.lever_arm_used   = d.lever_arm_used;
+    msg.heading_sigma_deg = d.heading_sigma_deg;
 
     gnss_status_pub_->publish(msg);
   }

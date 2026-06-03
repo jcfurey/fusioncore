@@ -42,6 +42,25 @@ struct FusionCoreConfig {
   double gps_track_heading_min_dist = 5.0;   // meters
   double gps_track_heading_max_sigma = 0.4;  // radians
 
+  // Motion quality thresholds for GPS track heading observability.
+  // A GPS displacement step only counts toward heading_observable_distance when:
+  //   - robot speed >= min_speed (filters GPS jitter and standstill noise)
+  //   - yaw rate <= max_yaw_rate (during fast turns the bearing changes too quickly
+  //     to give a reliable heading measurement)
+  // Increase min_speed on high-vibration platforms. Decrease max_yaw_rate if heading
+  // is being incorrectly validated during tight turns (parking lot maneuvers).
+  double gps_track_heading_min_speed    = 0.2;   // m/s
+  double gps_track_heading_max_yaw_rate = 0.3;   // rad/s (~17 deg/s)
+
+  // Lever arm correction is only applied when heading uncertainty is below this threshold.
+  // When heading_sigma exceeds this value (e.g. during prolonged turns with no GPS track
+  // heading fusions firing), rotating the lever arm by an uncertain heading adds more
+  // position error than it removes. Lever arm silently deactivates until heading tightens.
+  // Rule of thumb: lever_arm_length_m * sin(threshold_rad) should be < GPS noise sigma.
+  // Default 20 deg: disables lever arm during tight-turn sections where heading degrades,
+  // leaves it active during straight/gentle-curve driving where it genuinely helps.
+  double gnss_lever_arm_max_heading_sigma_deg = 20.0;
+
   // Delay compensation: state snapshot buffer
   // Mahalanobis outlier rejection
   // Rejects measurements that are statistically implausible.
@@ -218,6 +237,9 @@ struct GnssFixDebug {
   int                consecutive_rejects = 0;
   double             position_sigma_x   = 0.0;
   double             position_sigma_y   = 0.0;
+  // Lever arm observability
+  bool               lever_arm_used     = false;  // was lever arm correction applied for this fix
+  double             heading_sigma_deg  = 0.0;    // heading 1-sigma at time of this fix (degrees)
 };
 
 enum class SensorHealth {
@@ -510,6 +532,9 @@ private:
   // the chi2 gate to reject the very first heading fusion when the initial
   // heading error exceeds ~75 degrees.
   bool   gps_track_hdg_fused_ = false;
+
+  // Returns heading 1-sigma in radians computed from P via quaternion-to-yaw Jacobian.
+  double compute_heading_sigma_rad() const;
 
   void predict_to(double timestamp_seconds);
   bool apply_gnss_update(double timestamp_seconds, const sensors::GnssFix& fix);
