@@ -59,7 +59,7 @@ The core library (`fusioncore_core`) has zero ROS dependency. It can be used in 
 
 **Working and tested:**
 
-- UKF core: 39 unit tests passing
+- UKF core: 64 unit tests passing (57 in fusioncore_core, 7 in fusioncore_ros)
 - IMU + encoder + GPS fusion
 - Automatic IMU bias estimation
 - ECEF GPS conversion with quality-aware noise scaling
