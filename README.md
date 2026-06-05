@@ -38,16 +38,30 @@ Starts FusionCore with fake sensors and checks all outputs in about 15 seconds. 
 
 ### **Option B: Docker (no ROS install required)**
 
+The easiest way to try FusionCore — no ROS 2 installation needed. The image is hosted on GitHub Container Registry (GHCR).
+
 ```bash
+# Pull the image
 docker pull ghcr.io/manankharwar/fusioncore:latest
+
+# Quick test (15 seconds, no hardware)
+docker run --rm ghcr.io/manankharwar/fusioncore:latest bash tools/quick_test.sh
+
+# Interactive shell
 docker run --rm -it ghcr.io/manankharwar/fusioncore:latest bash
+
+# Run with your own YAML config + topic remaps
+docker run --rm -it --net=host \
+  -v ~/my_robot.yaml:/config/robot.yaml:ro \
+  ghcr.io/manankharwar/fusioncore:latest \
+  ros2 launch fusioncore_ros fusioncore.launch.py \
+    fusioncore_config:=/config/robot.yaml \
+    --ros-args \
+    -r /imu/data:=/your/imu/topic \
+    -r /gnss/fix:=/your/gps/topic
 ```
 
-Inside the container, verify everything works:
-
-```bash
-bash tools/quick_test.sh
-```
+📖 **Full Docker guide**: volume mounts, topic remapping, `--net=host`, and more → **[docs/docker.md](https://manankharwar.github.io/fusioncore/docker/)**
 ---
 
 ## Works on the hardware you actually have
@@ -154,6 +168,7 @@ Migration guide: [manankharwar.github.io/fusioncore/migration_from_robot_localiz
 **[manankharwar.github.io/fusioncore](https://manankharwar.github.io/fusioncore/)**
 
 - [Getting Started](https://manankharwar.github.io/fusioncore/getting-started/)
+- [Docker](https://manankharwar.github.io/fusioncore/docker/)
 - [Configuration reference](https://manankharwar.github.io/fusioncore/configuration/)
 - [Hardware configs](https://manankharwar.github.io/fusioncore/hardware/)
 - [Nav2 integration](https://manankharwar.github.io/fusioncore/nav2/)
