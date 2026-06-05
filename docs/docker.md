@@ -181,7 +181,8 @@ docker run --rm -it \
   -v ~/my_robot.yaml:/config/robot.yaml:ro \
   ghcr.io/manankharwar/fusioncore:latest \
   ros2 launch fusioncore_ros fusioncore.launch.py \
-    fusioncore_config:=./config/robot.yaml \
+    fusioncore_config:=/config/robot.yaml \
+    --ros-args \
     -r fusioncore:/imu/data:=/sensors/imu_0/data \
     -r fusioncore:/gnss/fix:=/gps/fix \
     -r fusioncore:/odom/wheels:=/wheel_odom
