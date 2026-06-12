@@ -213,3 +213,7 @@ If you prefer to cite the software release directly:
 ---
 
 Issues answered within 24 hours. Open a GitHub issue or find the discussion on [ROS Discourse](https://discourse.ros.org).
+
+Running FusionCore on your robot? Open a [Discussion](https://github.com/manankharwar/fusioncore/discussions/22) to get listed in [ADOPTERS.md](ADOPTERS.md).
+
+Need guaranteed results on your hardware? [Commercial support and fixed-price integration](https://manankharwar.github.io/fusioncore/support/) available.
