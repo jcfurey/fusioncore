@@ -74,6 +74,9 @@ nav:
   - Migrating from robot_localization: migration_from_robot_localization.md
   - How It Works: how-it-works.md
   - Troubleshooting: troubleshooting.md
+  - Guides:
+    - GPS position jumping near buildings: guides/gps-multipath-position-jumping.md
+    - Handling delayed GPS measurements: guides/delayed-gps-measurements.md
   - Known Limitations: known-limitations.md
   - Support & Integration: support.md
   - Blog: blog/index.md
