@@ -14,7 +14,7 @@ abstract: >
   estimation, adaptive noise covariance, chi-squared GPS outlier rejection,
   delay compensation via IMU ring buffer replay, and inertial coast mode
   during GPS blackouts. Benchmarked against robot_localization EKF on the
-  NCLT dataset across 9 sequences spanning all four seasons.
+  NCLT dataset across 12 sequences spanning all four seasons.
 authors:
   - family-names: Kharwar
     given-names: Manan
