@@ -2,10 +2,12 @@
 #include "fusioncore/motion_model.hpp"
 #include "fusioncore/sensors/gnss.hpp"
 #include "fusioncore/sensors/vslam.hpp"
+#include "fusioncore/sensors/magnetometer.hpp"
 
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <sensor_msgs/msg/imu.hpp>
+#include <sensor_msgs/msg/magnetic_field.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <sensor_msgs/msg/nav_sat_status.hpp>
 #include <gps_msgs/msg/gps_fix.hpp>
@@ -231,6 +233,23 @@ public:
     declare_parameter("zupt.angular_threshold",  0.05);  // rad/s
     declare_parameter("zupt.noise_sigma",        0.01);  // m/s: tight
 
+    // Raw magnetometer heading fusion.
+    // Subscribe to sensor_msgs/MagneticField and fuse heading via UKF 1-DOF update.
+    // Provides immediate yaw observability at startup and suppresses heading drift
+    // during GPS outages. Requires hard/soft iron calibration for accurate results.
+    // Set enabled: true only after calibrating with imu_calib or magneto.
+    declare_parameter("magnetometer.enabled",        false);
+    declare_parameter("magnetometer.topic",          std::string("/imu/mag"));
+    declare_parameter("magnetometer.noise_rad",      0.05);
+    declare_parameter("magnetometer.chi2_threshold", 9.21);
+    declare_parameter("magnetometer.declination_rad", 0.0);
+    // Hard iron bias (Tesla): [bx, by, bz]. Estimated from calibration.
+    declare_parameter("magnetometer.hard_iron",
+      std::vector<double>{0.0, 0.0, 0.0});
+    // Soft iron scale matrix (row-major 3x3). Identity = no correction.
+    declare_parameter("magnetometer.soft_iron",
+      std::vector<double>{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0});
+
     // Lateral velocity NHC: how strongly to enforce VY=0 (m/s sigma).
     // 0.05 (default): standard differential drive on good surface.
     // 10.0+: effectively disabled, use for mecanum/omnidirectional robots.
@@ -451,6 +470,34 @@ public:
     zupt_angular_threshold_  = get_parameter("zupt.angular_threshold").as_double();
     zupt_noise_sigma_        = get_parameter("zupt.noise_sigma").as_double();
 
+    mag_enabled_ = get_parameter("magnetometer.enabled").as_bool();
+    mag_topic_   = get_parameter("magnetometer.topic").as_string();
+    config.mag.noise_rad      = get_parameter("magnetometer.noise_rad").as_double();
+    config.mag.chi2_threshold = get_parameter("magnetometer.chi2_threshold").as_double();
+    config.mag.declination_rad = get_parameter("magnetometer.declination_rad").as_double();
+
+    {
+      auto hi = get_parameter("magnetometer.hard_iron").as_double_array();
+      if (hi.size() == 3) {
+        config.mag.hard_iron = Eigen::Vector3d(hi[0], hi[1], hi[2]);
+      }
+      auto si = get_parameter("magnetometer.soft_iron").as_double_array();
+      if (si.size() == 9) {
+        config.mag.soft_iron << si[0], si[1], si[2],
+                                si[3], si[4], si[5],
+                                si[6], si[7], si[8];
+      }
+    }
+
+    if (mag_enabled_) {
+      RCLCPP_INFO(get_logger(),
+        "Magnetometer heading fusion enabled on topic: %s "
+        "(noise=%.3f rad, declination=%.3f rad)",
+        mag_topic_.c_str(),
+        config.mag.noise_rad,
+        config.mag.declination_rad);
+    }
+
     config.encoder_nhc_vy_sigma        = get_parameter("encoder.nhc_vy_sigma").as_double();
     config.ground_constraint_vz_sigma  = get_parameter("ground_constraint.vz_sigma").as_double();
     config.ground_constraint_az_sigma  = get_parameter("ground_constraint.az_sigma").as_double();
@@ -617,6 +664,18 @@ public:
         }, sensor_opts);
       RCLCPP_INFO(get_logger(),
         "compass_msgs/Azimuth heading enabled on topic: %s", azimuth_topic_.c_str());
+    }
+
+    // Raw magnetometer heading: optional, enabled via magnetometer.enabled
+    if (mag_enabled_) {
+      mag_sub_ = create_subscription<sensor_msgs::msg::MagneticField>(
+        mag_topic_, 50,
+        [this](const sensor_msgs::msg::MagneticField::SharedPtr msg) {
+          std::lock_guard<std::mutex> lock(fc_mutex_);
+          mag_callback(msg);
+        }, sensor_opts);
+      RCLCPP_INFO(get_logger(),
+        "Magnetometer subscribed on topic: %s", mag_topic_.c_str());
     }
 
     // Second GNSS receiver: optional
@@ -835,6 +894,7 @@ public:
     gnss2_sub_.reset();
     gnss_heading_sub_.reset();
     azimuth_sub_.reset();
+    mag_sub_.reset();
     publish_timer_.reset();
     diag_timer_.reset();
     reset_srv_.reset();
@@ -2058,6 +2118,21 @@ private:
     }
   }
 
+  void mag_callback(const sensor_msgs::msg::MagneticField::SharedPtr msg)
+  {
+    if (!fc_->is_initialized()) return;
+    double t = rclcpp::Time(msg->header.stamp).seconds();
+    bool accepted = fc_->update_magnetometer(
+      t,
+      msg->magnetic_field.x,
+      msg->magnetic_field.y,
+      msg->magnetic_field.z);
+    if (!accepted) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+        "Magnetometer heading update rejected (chi2 gate)");
+    }
+  }
+
   // ─── Observability helpers ────────────────────────────────────────────────
 
   // Converts a GnssRejectionReason enum to the string stored in the message.
@@ -2386,6 +2461,7 @@ private:
         case fusioncore::HeadingSource::DUAL_ANTENNA:    return "DUAL_ANTENNA";
         case fusioncore::HeadingSource::IMU_ORIENTATION: return "IMU_ORIENTATION (9-axis)";
         case fusioncore::HeadingSource::GPS_TRACK:       return "GPS_TRACK";
+        case fusioncore::HeadingSource::MAGNETOMETER:    return "MAGNETOMETER";
       }
       return "Unknown";
     };
@@ -2557,6 +2633,7 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr          imu_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr          imu2_sub_;
   rclcpp::Subscription<compass_msgs::msg::Azimuth>::SharedPtr     azimuth_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::MagneticField>::SharedPtr mag_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr          gnss_heading_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr        encoder_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr        encoder2_sub_;
@@ -2585,6 +2662,8 @@ private:
   std::string heading_topic_;
   std::string gnss2_topic_;
   std::string azimuth_topic_;
+  std::string mag_topic_;
+  bool        mag_enabled_ = false;
   std::string encoder2_topic_;
   double      enc2_vel_noise_ = 0.05;
   double      enc2_yaw_noise_ = 0.02;

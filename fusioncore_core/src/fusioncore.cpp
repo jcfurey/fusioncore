@@ -114,6 +114,7 @@ void FusionCore::init(const State& initial_state, double timestamp_seconds) {
   last_imu_time_     = -1.0;
   last_encoder_time_ = -1.0;
   last_gnss_time_    = -1.0;
+  last_mag_time_     = -1.0;
   update_count_      = 0;
   initialized_       = true;
 
@@ -157,6 +158,7 @@ void FusionCore::reset() {
   last_encoder_time_ = -1.0;
   last_gnss_time_    = -1.0;
   last_vslam_time_   = -1.0;
+  last_mag_time_     = -1.0;
   update_count_      = 0;
   heading_validated_ = false;
   heading_source_    = HeadingSource::NONE;
@@ -1025,12 +1027,18 @@ FusionCoreStatus FusionCore::get_status() const {
     (last_timestamp_ - last_vslam_time_) > stale ? SensorHealth::STALE :
     SensorHealth::OK;
 
+  status.mag_health =
+    last_mag_time_ < 0.0 ? SensorHealth::NOT_INIT :
+    (last_timestamp_ - last_mag_time_) > stale ? SensorHealth::STALE :
+    SensorHealth::OK;
+
   // Outlier rejection counters
   status.gnss_outliers  = gnss_outliers_;
   status.imu_outliers   = imu_outliers_;
   status.enc_outliers   = enc_outliers_;
   status.hdg_outliers   = hdg_outliers_;
   status.vslam_outliers = vslam_outliers_;
+  status.mag_outliers   = mag_outliers_;
 
   // Innovation norms from last accepted update per sensor
   status.gnss_innovation_norm    = last_gnss_innovation_norm_;
@@ -1134,6 +1142,63 @@ bool FusionCore::update_pose(
     }
   }
 
+  return true;
+}
+
+bool FusionCore::update_magnetometer(
+  double timestamp_seconds,
+  double mx, double my, double mz)
+{
+  if (!initialized_)
+    throw std::runtime_error("FusionCore: update_magnetometer() called before init()");
+
+  predict_to(timestamp_seconds);
+
+  // Extract current roll and pitch from the filter state for tilt compensation.
+  // Yaw is what we are about to measure, so we only need roll and pitch here.
+  const State& s = ukf_.state();
+  double roll, pitch, yaw_state;
+  quat_to_euler(s.x[QW], s.x[QX], s.x[QY], s.x[QZ], roll, pitch, yaw_state);
+
+  // Compute tilt-compensated heading from raw field vector
+  double yaw_mag = sensors::mag_yaw_from_field(mx, my, mz, config_.mag, roll, pitch);
+
+  // Fuse as a 1-DOF heading measurement, same path as dual-antenna GPS heading
+  sensors::GnssHdgMeasurement z;
+  z[0] = yaw_mag;
+
+  sensors::GnssHdgNoiseMatrix R;
+  R(0,0) = config_.mag.noise_rad * config_.mag.noise_rad;
+
+  // bit 0 = dimension 0 (heading) is an angle: wrap innovation across +-pi
+  constexpr unsigned int MAG_ANGLE_DIMS = 0b1;
+
+  if (config_.outlier_rejection) {
+    sensors::GnssHdgMeasurement innov_pre;
+    sensors::GnssHdgNoiseMatrix S;
+    ukf_.predict_measurement<sensors::GNSS_HDG_DIM>(
+      z, sensors::gnss_hdg_measurement_function, R, innov_pre, S, MAG_ANGLE_DIMS);
+    if (is_outlier<sensors::GNSS_HDG_DIM>(innov_pre, S, config_.mag.chi2_threshold)) {
+      ++mag_outliers_;
+      return false;
+    }
+  }
+
+  ukf_.update<sensors::GNSS_HDG_DIM>(
+    z, sensors::gnss_hdg_measurement_function, R, MAG_ANGLE_DIMS);
+
+  // Magnetometer immediately provides valid heading.
+  // Upgrade from GPS_TRACK (which requires 5m of motion) but never downgrade
+  // from DUAL_ANTENNA (which is a stronger absolute source).
+  if (!heading_validated_ ||
+      heading_source_ == HeadingSource::NONE ||
+      heading_source_ == HeadingSource::GPS_TRACK) {
+    heading_validated_ = true;
+    heading_source_    = HeadingSource::MAGNETOMETER;
+  }
+
+  last_mag_time_ = timestamp_seconds;
+  ++update_count_;
   return true;
 }
 

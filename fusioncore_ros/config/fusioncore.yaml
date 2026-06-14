@@ -165,6 +165,40 @@ fusioncore:
     # during straight/gentle-curve driving where it genuinely helps.
     gnss.lever_arm_max_heading_sigma_deg: 20.0
 
+    # ── Raw magnetometer heading ──────────────────────────────────────────────
+    # Fuses heading from a raw 3-axis magnetometer (sensor_msgs/MagneticField).
+    # Applies hard/soft iron correction and tilt compensation using the current
+    # filter roll/pitch. Useful for GPS-denied indoor/outdoor environments where
+    # a compass can provide heading when GPS track heading is unavailable.
+    # Set enabled: true and topic to your magnetometer topic.
+
+    magnetometer.enabled: false
+    magnetometer.topic: "/imu/mag"
+
+    # Heading noise standard deviation (radians). 0.05 rad (~3 deg) is typical for
+    # a well-calibrated sensor in a benign magnetic environment.
+    # Loosen to 0.15-0.3 near motors or in environments with variable magnetic fields.
+    magnetometer.noise_rad: 0.05
+
+    # Chi-squared gate: chi2(1, 0.99) = 9.21 (1-DOF heading measurement).
+    magnetometer.chi2_threshold: 9.21
+
+    # Magnetic declination (radians): offset between magnetic north and true north.
+    # Positive east. Look up at https://www.magnetic-declination.com
+    # Leave at 0.0 if you are using GPS track heading to anchor the filter: the
+    # constant offset is absorbed over time.
+    magnetometer.declination_rad: 0.0
+
+    # Hard iron correction (Tesla): constant bias offset in body frame.
+    # Calibrate using imu_calib or by rotating the sensor through a full circle.
+    # Format: [x, y, z]
+    magnetometer.hard_iron: [0.0, 0.0, 0.0]
+
+    # Soft iron correction matrix (3x3, row-major). Identity = disabled.
+    # Calibrate using imu_calib or magneto alongside hard iron.
+    # Format: [r00, r01, r02, r10, r11, r12, r20, r21, r22]
+    magnetometer.soft_iron: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+
     # ── Radar Doppler velocity ────────────────────────────────────────────────
     # Fuses ego-velocity from a 4D imaging radar. Works indoors and in all weather.
     # Expects nav_msgs/Odometry with velocity in body frame (linear.x=forward, linear.y=lateral).

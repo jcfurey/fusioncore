@@ -6,6 +6,7 @@
 #include "fusioncore/sensors/encoder.hpp"
 #include "fusioncore/sensors/gnss.hpp"
 #include "fusioncore/sensors/vslam.hpp"
+#include "fusioncore/sensors/magnetometer.hpp"
 #include <chrono>
 #include <optional>
 #include <string>
@@ -21,6 +22,7 @@ struct FusionCoreConfig {
   sensors::EncoderParams encoder;
   sensors::GnssParams    gnss;
   sensors::VslamParams   vslam;
+  sensors::MagParams     mag;
   double min_dt = 1e-6;
   double max_dt = 1.0;
 
@@ -204,10 +206,11 @@ struct FusionCoreConfig {
 
 // How heading was validated: tracked per filter run
 enum class HeadingSource {
-  NONE           = 0,  // no independent heading: lever arm disabled
-  DUAL_ANTENNA   = 1,  // dual GNSS antenna heading received
-  IMU_ORIENTATION = 2, // AHRS/IMU published full orientation
-  GPS_TRACK      = 3,  // robot moved enough for heading to be geometric
+  NONE            = 0,  // no independent heading: lever arm disabled
+  DUAL_ANTENNA    = 1,  // dual GNSS antenna heading received
+  IMU_ORIENTATION = 2,  // AHRS/IMU published full orientation
+  GPS_TRACK       = 3,  // robot moved enough for heading to be geometric
+  MAGNETOMETER    = 4,  // raw magnetometer field fused directly
 };
 
 // Why a GNSS fix was rejected (or ACCEPTED if it passed)
@@ -267,8 +270,10 @@ struct FusionCoreStatus {
   int enc_outliers   = 0;
   int hdg_outliers   = 0;
   int vslam_outliers = 0;
+  int mag_outliers   = 0;
 
   SensorHealth vslam_health = SensorHealth::NOT_INIT;
+  SensorHealth mag_health   = SensorHealth::NOT_INIT;
 
   // Innovation norms: magnitude of the last accepted measurement residual.
   // Zero until the first accepted update from that sensor.
@@ -351,6 +356,16 @@ public:
     const sensors::GnssHeading& heading
   );
 
+  // Raw magnetometer heading update.
+  // Applies hard/soft iron correction, tilt-compensates using current filter
+  // roll/pitch, then fuses the resulting yaw as a 1-DOF UKF measurement.
+  // Call this from a sensor_msgs/MagneticField subscriber callback.
+  // Returns true if the measurement was accepted (passed chi2 gate).
+  bool update_magnetometer(
+    double timestamp_seconds,
+    double mx, double my, double mz
+  );
+
   const State&       get_state()      const;
   FusionCoreStatus   get_status()     const;
   const GnssFixDebug& get_gnss_debug() const { return gnss_debug_; }
@@ -369,6 +384,7 @@ private:
   double last_encoder_time_ = -1.0;
   double last_gnss_time_    = -1.0;
   double last_vslam_time_   = -1.0;
+  double last_mag_time_     = -1.0;
   int    update_count_      = 0;
 
   // ─── Adaptive noise covariance ───────────────────────────────────────────
@@ -448,6 +464,7 @@ private:
   int enc_outliers_    = 0;
   int hdg_outliers_    = 0;
   int vslam_outliers_  = 0;
+  int mag_outliers_    = 0;
 
   // Per-fix observability: updated on every update_gnss() call
   GnssFixDebug gnss_debug_;
