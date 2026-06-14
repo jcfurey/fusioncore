@@ -4,14 +4,45 @@
 #
 # Stops automatically when nclt_player prints "Playback complete."
 # No Ctrl+C needed.
+#
+# Prerequisites: see benchmarks/check_prereqs.sh
+
+set -euo pipefail
 
 SEQ=${1:-2012-01-08}
 
-export PATH="/home/manankharwar/.local/bin:$PATH"
-source /opt/ros/jazzy/setup.bash
-source /mnt/c/Users/Admin/ROS/ROS/fusioncore/install/setup.bash
+# Derive repo root from script location — works from any directory.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-REPO=/mnt/c/Users/Admin/ROS/ROS/fusioncore
+# Add pip user bin so evo is found regardless of how it was installed.
+export PATH="$HOME/.local/bin:$PATH"
+
+# Source ROS if not already active.
+if [ -z "${ROS_DISTRO:-}" ]; then
+    ROS_SETUP="${ROS_SETUP:-/opt/ros/jazzy/setup.bash}"
+    if [ -f "$ROS_SETUP" ]; then
+        # shellcheck disable=SC1090
+        source "$ROS_SETUP"
+    else
+        echo "ERROR: ROS is not sourced and $ROS_SETUP was not found."
+        echo "  Fix: source /opt/ros/<distro>/setup.bash   or set ROS_SETUP=/path/to/setup.bash"
+        exit 1
+    fi
+fi
+
+# Source the FusionCore workspace if fusioncore_datasets is not already available.
+if ! ros2 pkg list 2>/dev/null | grep -q "^fusioncore_datasets$"; then
+    INSTALL_SETUP="$REPO/install/setup.bash"
+    if [ -f "$INSTALL_SETUP" ]; then
+        # shellcheck disable=SC1090
+        source "$INSTALL_SETUP"
+    else
+        echo "ERROR: fusioncore_datasets package not found."
+        echo "  Fix: cd $REPO && colcon build --packages-select fusioncore_core fusioncore_ros fusioncore_datasets"
+        exit 1
+    fi
+fi
 RATE=3.0
 WALL_TIME=3000   # hard cap: 50 min covers longest sequence at 3x
 

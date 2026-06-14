@@ -85,8 +85,6 @@ nav:
     - Handling delayed GPS measurements: guides/delayed-gps-measurements.md
     - navsat_transform startup errors: guides/navsat-transform-startup-errors.md
     - EKF and UKF NaN divergence: guides/ekf-ukf-nan-divergence.md
-    - navsat_transform startup errors: guides/navsat-transform-startup-errors.md
-    - EKF and UKF NaN divergence: guides/ekf-ukf-nan-divergence.md
   - Known Limitations: known-limitations.md
   - Support & Integration: support.md
   - Blog: blog/index.md

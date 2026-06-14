@@ -181,15 +181,48 @@ Specific cause: adversarial GPS cluster at blackout boundary. Structurally diffe
 
 ## Reproduce
 
-### Prerequisites
+### 1. Install dependencies
 
-- NCLT data: download from http://robots.engin.umich.edu/nclt/
-  Place each sequence under `benchmarks/nclt/<date>/raw files/`
-- ROS 2 Jazzy sourced
-- `evo` installed: `pip install evo --break-system-packages`
-- FusionCore built: `colcon build --packages-select fusioncore_core fusioncore_ros fusioncore_datasets`
+```bash
+# ROS 2 Jazzy (Ubuntu 24.04 native or your distro)
+source /opt/ros/jazzy/setup.bash
 
-### Run one sequence (full length, auto-stops)
+# robot_localization
+sudo apt install ros-jazzy-robot-localization
+
+# Python tools
+pip install evo matplotlib --break-system-packages
+```
+
+### 2. Build FusionCore
+
+```bash
+cd /path/to/fusioncore
+colcon build --packages-select fusioncore_core fusioncore_ros fusioncore_datasets
+source install/setup.bash
+```
+
+### 3. Check prerequisites
+
+```bash
+bash benchmarks/check_prereqs.sh
+```
+
+All seven checks must pass before proceeding.
+
+### 4. Download NCLT data
+
+```bash
+# One sequence (~250 MB compressed)
+bash benchmarks/nclt_download.sh 2012-01-08
+
+# All 12 sequences (~3 GB total)
+bash benchmarks/nclt_download.sh all
+```
+
+Files land in `benchmarks/nclt/<date>/raw files/` and are extracted automatically.
+
+### 5. Run one sequence (full length, auto-stops)
 
 ```bash
 bash benchmarks/run_one.sh 2012-01-08
@@ -197,13 +230,24 @@ bash benchmarks/run_one.sh 2012-01-08
 
 Takes 15-50 minutes depending on sequence length (running at 3x real time). Results write to `benchmarks/nclt/2012-01-08/results_full/`.
 
-### Run all sequences sequentially
+### 6. Run all sequences sequentially
 
 ```bash
 bash benchmarks/run_all.sh
 ```
 
-Runs all sequences in chronological order. Plan for 6-8 hours total.
+Runs all 12 sequences in chronological order. Plan for 6-8 hours total.
+
+### Zero-download demo (no ROS required)
+
+Pre-baked results for the GPS spike test are committed to the repo. Reproduce the plot in seconds:
+
+```bash
+pip install numpy matplotlib --break-system-packages
+python3 tools/demo_quick.py --open
+```
+
+This shows the 707 m GPS spike injection test: FusionCore chi-squared gate blocks it, RL-EKF accepts and diverges 50+ m off-course.
 
 ---
 

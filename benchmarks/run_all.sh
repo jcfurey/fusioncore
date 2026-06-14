@@ -5,9 +5,10 @@
 #
 # Usage: bash benchmarks/run_all.sh
 
-set -e
+set -euo pipefail
 
-REPO=/mnt/c/Users/Admin/ROS/ROS/fusioncore
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 SEQUENCES=(
     2012-01-08
