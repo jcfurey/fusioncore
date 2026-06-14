@@ -66,6 +66,18 @@ fusioncore:
     gnss.heading_topic: ""          # set if using dual-antenna F9P for heading
     gnss.azimuth_topic: ""
 
+    # Raw magnetometer heading: fuses sensor_msgs/MagneticField directly.
+    # The BNO085 publishes this on /imu/mag at 100 Hz via the Hillcrest driver.
+    # Requires hard/soft iron calibration (use imu_calib or magneto).
+    # Useful for GPS-denied phases where track heading is unavailable.
+    magnetometer.enabled: false
+    magnetometer.topic: "/imu/mag"
+    magnetometer.noise_rad: 0.05
+    magnetometer.chi2_threshold: 9.21
+    magnetometer.declination_rad: 0.0    # look up at magnetic-declination.com
+    magnetometer.hard_iron: [0.0, 0.0, 0.0]
+    magnetometer.soft_iron: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+
     outlier_rejection: true
     outlier_threshold_gnss: 16.27   # chi2(3, 0.999)
     outlier_threshold_enc: 11.34    # chi2(3, 0.999)
