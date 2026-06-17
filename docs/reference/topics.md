@@ -17,6 +17,15 @@
 | `radar.velocity_topic` | `nav_msgs/Odometry` | Radar Doppler ego-velocity in body frame: linear.x=forward, linear.y=lateral (optional) |
 | `vslam.topic` | `nav_msgs/Odometry` | VSLAM 6-DOF pose: pose.pose + pose.covariance used; twist ignored (optional) |
 
+### fusioncore_ublox bridge topics (separate package)
+
+| Topic | Type | Notes |
+|---|---|---|
+| `/ublox/navpvt` (configurable) | `ublox_msgs/NavPVT` | Input: raw u-blox NavPVT message |
+| `/gnss/doppler_vel` (configurable) | `nav_msgs/Odometry` | Output: ENU velocity, wire to `gnss.velocity_topic` |
+
+The `fusioncore_ublox` package is a separate optional companion; FusionCore has no dependency on it. See [GNSS Doppler bridge](../configuration.md#gnss-doppler-velocity-bridge-ublox-f9p--m8u) for setup.
+
 Default topic names can be changed with ROS 2 remaps:
 
 ```bash

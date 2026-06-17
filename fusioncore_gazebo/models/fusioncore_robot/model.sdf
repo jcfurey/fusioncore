@@ -23,9 +23,21 @@
           <box><size>0.5 0.4 0.2</size></box>
         </geometry>
         <material>
-          <ambient>0.2 0.5 0.8 1</ambient>
-          <diffuse>0.2 0.5 0.8 1</diffuse>
+          <ambient>0.10 0.35 0.08 1</ambient>
+          <diffuse>0.12 0.38 0.09 1</diffuse>
         </material>
+      </visual>
+      <!-- Yellow accent stripe -->
+      <visual name="stripe_visual">
+        <pose>0.18 0 0.11 0 0 0</pose>
+        <geometry><box><size>0.15 0.42 0.01</size></box></geometry>
+        <material><ambient>0.95 0.82 0.0 1</ambient><diffuse>0.95 0.82 0.0 1</diffuse></material>
+      </visual>
+      <!-- GPS antenna stub -->
+      <visual name="gps_antenna_visual">
+        <pose>-0.12 0 0.12 0 0 0</pose>
+        <geometry><cylinder><radius>0.025</radius><length>0.06</length></cylinder></geometry>
+        <material><ambient>0.85 0.85 0.85 1</ambient></material>
       </visual>
     </link>
 

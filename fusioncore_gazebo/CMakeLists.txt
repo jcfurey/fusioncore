@@ -14,6 +14,18 @@ install(PROGRAMS
 )
 
 install(PROGRAMS
+  launch/circle_driver.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME circle_driver
+)
+
+install(PROGRAMS
+  launch/path_publisher.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME path_publisher
+)
+
+install(PROGRAMS
   launch/integration_test.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME integration_test

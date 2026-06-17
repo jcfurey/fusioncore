@@ -121,13 +121,18 @@ def generate_launch_description():
         )
     )
 
-    # GPS publisher: converts ground truth odom to NavSatFix
-    # Replaces broken Gazebo NavSat sensor (gz-sim issue #2163)
+    # GPS publisher: converts ground truth odom to NavSatFix + /gps/odometry.
+    # Passes world_name so the node subscribes to the correct Gazebo pose topic.
+    # spike_at_s=-1 disables spike injection in the integration test.
     gps_pub = Node(
         package="fusioncore_gazebo",
         executable="gz_pose_to_gps",
         name="gz_pose_to_gps",
         output="screen",
+        parameters=[{
+            "world_name": "fusioncore_test",
+            "spike_at_s": -1.0,
+        }],
     )
 
     return LaunchDescription([

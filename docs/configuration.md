@@ -337,6 +337,50 @@ fusioncore:
 
 ---
 
+## GNSS Doppler velocity bridge (ublox F9P / M8U)
+
+FusionCore itself has no dependency on any specific GPS driver. It accepts velocity from any receiver via `gnss.velocity_topic`, which expects `nav_msgs/Odometry` with ENU velocity (`linear.x=east`, `linear.y=north`).
+
+If your receiver is a u-blox module (F9P, M8U, NEO-M9N, etc.), the `fusioncore_ublox` companion package provides a ready-made bridge. It is a separate package with its own dependency on `ublox_msgs` so the FusionCore core remains clean.
+
+```bash
+# Build the companion package alongside FusionCore
+colcon build --packages-select fusioncore_ros fusioncore_ublox
+```
+
+**Launch the bridge alongside FusionCore:**
+
+```bash
+# Terminal 1: FusionCore
+ros2 launch fusioncore_ros fusioncore.launch.py fusioncore_config:=your_robot.yaml
+
+# Terminal 2: ublox bridge
+ros2 launch fusioncore_ublox gnss_doppler_bridge.launch.py \
+  navpvt_topic:=/ublox/navpvt \
+  output_topic:=/gnss/doppler_vel
+```
+
+**Matching FusionCore config:**
+
+```yaml
+gnss.velocity_topic: "/gnss/doppler_vel"
+```
+
+**What the bridge does:**
+
+| NavPVT field | Unit | ENU output |
+|---|---|---|
+| `vel_e` (east) | mm/s | `twist.linear.x` (m/s) |
+| `vel_n` (north) | mm/s | `twist.linear.y` (m/s) |
+| `vel_d` (down) | mm/s | `twist.linear.z` = -vel_d/1000 (m/s) |
+| `s_acc` | mm/s | `covariance[0,7]` = (s_acc/1000)^2 |
+
+Fixes with `fix_type < 3` (no 3D lock) or `gnssFixOK` flag unset are silently dropped. Speeds below 0.05 m/s are also dropped to avoid heading corruption at standstill.
+
+**Other receivers:** publish `nav_msgs/Odometry` with ENU velocity on any topic and point `gnss.velocity_topic` at it. FusionCore doesn't care which driver produced it.
+
+---
+
 ## Choosing a motion model
 
 Start with the default (`ConstantVelocityAcceleration`) unless you have a specific reason to change it. It works well for all platforms and matches what robot_localization users are used to.
