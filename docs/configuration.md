@@ -671,6 +671,31 @@ not matter. For one parked overnight it does. The evidence is dropped the moment
 the encoders report motion, so a robot that parks once does not stay
 over-confident for the rest of the run.
 
+**It will corrupt a loop-closure measurement. Set it to 1.0 before you take
+one.** The usual way to measure this filter is to drive a loop, park back on a
+mark, and compare the estimate against the mark. That measurement is taken in a
+parked window, which is the one window this inflation is active in, so whatever
+error the filter held at the moment it stopped is what gets reported. It cannot
+be corrected away no matter how long you sit there, and the number looks like
+drift the filter accumulated while driving.
+
+Measured on a 2026-09-26 rover run, 99 m driven and then 200 s parked on the
+mark. The filter was shown 150 fixes averaging 8.20 m of error, accepted every
+one of them, and moved 0.279 m in total: an effective gain of 0.0002. Loop
+closure came out 7.22 m while the raw receiver closed 0.90 m. Replaying the same
+measurements with this set to 1.0 and nothing else changed closed 0.79 m. Across
+seven runs from that campaign, setting it to 1.0 improved closure in five, left
+one unchanged, and cost 0.06 m in one.
+
+The inflation is not the problem, and turning it off costs something: on 17.5
+minutes genuinely parked, peak excursion was 0.37 m with it and 2.36 m without,
+against a receiver wandering 4.60 m. The problem is that it cannot tell a
+receiver repeating the same correlated error from a filter that is simply biased.
+An 8 m offset from a receiver scattering 2.8 m is the second thing, and
+suppressing the correction is the wrong response to it. Until that is separated,
+pick the metric you are actually measuring: 1.0 for closure, the cap for idle
+drift.
+
 ## Secondary twist sources (`encoder2`)
 
 `encoder2.topic` accepts a second `nav_msgs/Odometry` source and fuses it through
