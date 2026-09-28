@@ -74,6 +74,35 @@ struct FusionCoreConfig {
   double gps_track_heading_min_speed    = 0.2;   // m/s
   double gps_track_heading_max_yaw_rate = 0.3;   // rad/s (~17 deg/s)
 
+  // Discard the bearing window on the ANGLE TURNED across it, in degrees,
+  // instead of on an instantaneous yaw-rate sample. 0.0 keeps the rate check
+  // above and is the default, so nothing changes until this is set.
+  //
+  // Why it exists (#144). max_yaw_rate is tested against one sample, so a single
+  // 20 ms jolt off a stone discards the whole accumulated baseline. Measured over
+  // five rover bags on ordinary grass: the rate gate latched 791-887 times per run
+  // and the baseline never got past 8.8-11.9 m against the 25 m that fusion needs,
+  // so ZERO bearings were ever fused. The excursions were not noise and not
+  // corners: median duration one sample, median NET angle 0.43-0.52 degrees,
+  // 93-100% under 2 degrees, and zero excursions while parked. Meanwhile the four
+  // scripted 90 degree corners were driven at 0.09 rad/s achieved, under the 0.3
+  // threshold, so the gate caught none of the turns it exists for.
+  //
+  // At 5.0 degrees the same five bags reach 26.7-29.9 m and clear 25 m on every
+  // one, latching 103-110 times instead of 791-887. Raising max_yaw_rate instead
+  // was tried across four bags and rejected: it lets a bearing span a real turn,
+  // which injects a wrong heading.
+  //
+  // The angle is integrated from the RAW GYRO. The other three sources were each
+  // tried and each fails: the yaw ESTIMATE swings 122 degrees on a 1.03 degree
+  // truth and sometimes reverses sign because the quaternion covariance is
+  // unbounded; the filter's WZ state accumulates its own noise and bias, so six
+  // seconds of driving straight trips the gate; and wheel encoders over-report
+  // rotation under slip, 129 degrees out on one of the five bags. Integrating the
+  // raw gyro therefore needs IMU samples: on a platform with no gyro, leave this
+  // at 0.0 and keep the rate check.
+  double gps_track_heading_max_window_turn_deg = 0.0;  // degrees, 0 = use max_yaw_rate
+
   // Lever arm correction is only applied when heading uncertainty is below this threshold.
   // When heading_sigma exceeds this value (e.g. during prolonged turns with no GPS track
   // heading fusions firing), rotating the lever arm by an uncertain heading adds more
@@ -257,6 +286,41 @@ struct FusionCoreConfig {
   // receiver's noise rather than as noise itself. Floored at 3 internally, since
   // the autocorrelation term needs at least two consecutive pairs.
   int zupt_gnss_min_samples = 5;
+  // Stand the parked inflation down when the fix is further away than the receiver's own
+  // measured parked scatter can explain (#145). 0 disables the check.
+  //
+  // The inflation exists for a receiver repeating a correlated error, and it cannot tell
+  // that from a filter that is simply biased. On fc_field_20260926_1755 the filter sat
+  // 8.20 m from a receiver whose parked scatter was 2.8 m, accepted all 150 fixes, and
+  // moved 0.279 m in total: an effective gain of 0.0002. Loop closure read 7.22 m where
+  // the raw receiver closed 0.90 m, and the workaround was to switch the whole feature
+  // off, which costs 0.37 m of idle excursion becoming 2.36 m.
+  //
+  // An offset many times the observed scatter is not correlated receiver noise, it is the
+  // filter being wrong, and refusing the correction is the wrong response.
+  //
+  // 5.0 is measured, not chosen. Swept on the rover bags with the inflation left at 100,
+  // reading closure on fc_field_20260926_1755 against idle excursion on the 17.5 minute
+  // parked fc_field_20260926_1810:
+  //
+  //     ratio   1755 closure   1810 idle excursion
+  //       0        3.80 m           0.37 m          (before this check existed)
+  //       3        1.18 m           1.59 m
+  //       4        1.48 m           0.75 m
+  //       5        1.83 m           0.36 m          <- full idle benefit kept
+  //       8        2.96 m           0.37 m
+  //
+  // So it halves the closure cost while keeping ALL of the idle-drift benefit the
+  // inflation exists for. It does NOT eliminate the tradeoff: disabling the inflation
+  // entirely still closes better (0.79 m) at the cost of idle drift going to 2.36 m.
+  //
+  // The reason a simple innovation test cannot fully separate the two: a receiver
+  // genuinely wandering while parked reaches several times its own scatter (4.60 m peak
+  // against ~1 m on 1810), which is indistinguishable from bias on any single fix. The
+  // better discriminator is PERSISTENCE, because filter bias holds one direction while
+  // receiver wander changes direction. That needs the mean innovation over the parked
+  // window rather than the instantaneous one, and is not done here.
+  double zupt_gnss_bias_ratio = 5.0;
 
   // Catch wheel odometry that has died while the robot is still driving.
   //
@@ -631,6 +695,11 @@ struct GnssFixDebug {
   // The same question answered completely, including the two cases the booleans
   // above never covered: baseline too short, and bearing sigma too high.
   TrackHeadingState  track_heading_state = TrackHeadingState::NOT_ATTEMPTED;
+  // How far the bearing window thinks the robot has turned, degrees. #144 could
+  // not be diagnosed from a bag because this number did not exist: the gate was
+  // discarding 300 windows a run and nothing reported why. -1 when the angle gate
+  // is disabled, so "off" is distinguishable from "zero turn measured".
+  double             track_heading_window_turn_deg = -1.0;
   double             track_heading_baseline_m = 0.0;  // displacement since the reference fix
   double             track_heading_sigma_rad  = 0.0;  // sigma_xy/dist, -1 if not computed
   double             hdop               = 0.0;
@@ -768,6 +837,18 @@ struct FusionCoreStatus {
   // which means the wheel odometry is lying. Published so it is visible in a bag
   // rather than only in a log line nobody was watching.
   bool   zupt_parked_but_moving     = false;
+  // True when the #145 bias check stood the parked inflation down for this fix.
+  bool   gnss_parked_bias_standdown = false;
+  // #151: how many times the post-blackout recovery inflation has actually FIRED, and
+  // the largest sigma it asked for. On NCLT 2012-08-20 raising gnss.p_inflate_sigma 40x
+  // moved ATE by 0.001 m, which said the mechanism was inert and there was no field to
+  // confirm it from a bag. A recovery that silently never runs looks exactly like one
+  // that runs and does not help.
+  long   gnss_recovery_inflations = 0;
+  // #151: the two flags that decide whether recovery can run at all.
+  bool   gnss_reject_after_gap = false;
+  int    gnss_consecutive_rejects_now = 0;
+  double gnss_recovery_last_sigma = 0.0;
   double zupt_parked_straightness   = 0.0;
   double gnss_chi2_max = -1.0;
   double gnss_chi2_threshold = 0.0;
@@ -1035,6 +1116,19 @@ private:
   double gnss_parked_sigma_observed_ = -1.0;
   double gnss_parked_sigma_declared_ = -1.0;
   double gnss_parked_correlation_    = 0.0;
+  // #145: true when the bias check stood the parked inflation down for the last fix.
+  // Stamp of the last fix RECEIVED, accepted or not (#151). Distinct from
+  // last_gnss_time_, which is the last ACCEPTED fix. The difference is the whole
+  // discriminator between an outage and a spike: during a spike fixes keep arriving on
+  // cadence while none is accepted, so the gap to the last ACCEPTED fix grows without
+  // limit and wrongly looks like an outage. The gap to the last RECEIVED fix stays at
+  // the cadence, which is the physical truth.
+  double last_gnss_rx_time_ = -1.0;
+  // Gap to the previous RECEIVED fix, computed once per fix at entry.
+  double gnss_rx_gap_ = 0.0;
+  bool   gnss_parked_bias_standdown_ = false;
+  long   gnss_recovery_inflations_ = 0;
+  double gnss_recovery_last_sigma_ = 0.0;
   double gnss_parked_inflation_      = 1.0;
   // Straightness check on the parked fixes, see zupt_parked_motion_m.
   double parked_ref_x_ = 0.0, parked_ref_y_ = 0.0;
@@ -1209,6 +1303,17 @@ private:
   // yaw_rate check; consumed and cleared in apply_gnss_update()'s heading
   // fusion block.
   bool   hdg_window_had_turn_ = false;
+
+  // Signed raw-gyro angle accumulated across the current bearing window, radians.
+  // Signed deliberately: a wheel crossing a stone rocks the robot one way and
+  // back, so those cancel, while a real corner accumulates monotonically. That is
+  // the whole reason this discriminates where an instantaneous rate cannot.
+  // Reset wherever hdg_window_had_turn_ is cleared, because both mean "the window
+  // starts again from here". Only maintained when
+  // gps_track_heading_max_window_turn_deg > 0.
+  double hdg_window_turn_rad_ = 0.0;
+  // Stamp of the last IMU sample folded into hdg_window_turn_rad_, for dt.
+  double hdg_turn_prev_t_ = -1.0;
 
   // Rolling accelerometer magnitude window for the ZUPT stationarity check.
   // 100 samples is one second at the 100 Hz these IMUs run at.

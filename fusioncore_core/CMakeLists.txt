@@ -77,6 +77,9 @@ if(BUILD_TESTING)
   ament_add_gtest(test_heading_cross_check tests/test_heading_cross_check.cpp TIMEOUT 300)
   target_link_libraries(test_heading_cross_check fusioncore_core Eigen3::Eigen)
 
+  ament_add_gtest(test_track_heading_turn_gate tests/test_track_heading_turn_gate.cpp TIMEOUT 300)
+  target_link_libraries(test_track_heading_turn_gate fusioncore_core Eigen3::Eigen)
+
   ament_add_gtest(test_continuity_auto tests/test_continuity_auto.cpp TIMEOUT 300)
   target_link_libraries(test_continuity_auto fusioncore_core Eigen3::Eigen)
 
@@ -97,6 +100,12 @@ if(BUILD_TESTING)
 
   ament_add_gtest(test_fixed_dt tests/test_fixed_dt.cpp TIMEOUT 300)
   target_link_libraries(test_fixed_dt fusioncore_core Eigen3::Eigen)
+
+  ament_add_gtest(test_attitude_observability tests/test_attitude_observability.cpp TIMEOUT 300)
+  target_link_libraries(test_attitude_observability fusioncore_core Eigen3::Eigen)
+
+  ament_add_gtest(test_zero_gyro_yaw tests/test_zero_gyro_yaw.cpp TIMEOUT 300)
+  target_link_libraries(test_zero_gyro_yaw fusioncore_core Eigen3::Eigen)
 endif()
 
 ament_export_targets(fusioncore_core_targets HAS_LIBRARY_TARGET)

@@ -41,6 +41,94 @@ struct UKFParams {
   double beta  = 2.0;    // prior knowledge of distribution (2.0 = Gaussian)
   double kappa = 0.0;    // secondary scaling (0.0 is standard)
 
+  // Largest rotation, in degrees, that a single sigma point may represent relative to
+  // the mean attitude. 0 disables the limit and is the default.
+  //
+  // Why this exists (#150). Yaw is unobservable without an absolute heading source, so
+  // P(QZ,QZ) grows without bound: measured at 177.3 after 60 s on a perfect encoder,
+  // where a quaternion component lives in [-1,1] and its variance therefore cannot
+  // exceed 1. The sigma points are formed as x +/- L.col(i) with the quaternion
+  // perturbed ADDITIVELY and not renormalised, so a perturbation of sqrt(23*177) ~= 64
+  // on qz makes (1,0,0,64), which normalises to a rotation of about 178 degrees. The
+  // sigma points sit nearly antipodal to the mean, their forward displacements cancel,
+  // and position advances at a fraction of a perfect velocity: 87% at t=5 s decaying to
+  // 38% by t=150 s while velocity and yaw both read perfect.
+  //
+  // This bounds the SAMPLED POINTS, not P. That distinction is the whole point: four
+  // previous attempts modified P (diagonal cap at 0.25, congruence cap at 0.05, Q
+  // scaling, Markley mean) and all were reverted, because scaling a row and column
+  // destroys the cross-covariance a measurement needs to correct yaw. P is left exactly
+  // as it is here; only the points drawn from it are kept physical.
+  //
+  // A sigma point representing a 178 degree rotation is not a sample of the attitude
+  // distribution, it is an artefact of representing an angle in a linear covariance.
+  //
+  // IT WORKS ON DEAD RECKONING AND FAILS ON REAL DATA. Keep it off. This is the SIXTH
+  // attempt on #150 and it is recorded here so there is not a seventh.
+  //
+  // On the synthetic (tools/repro/dr.cpp, perfect encoder, still IMU, no GPS) it is a
+  // complete fix, and it holds at every horizon where the unlimited filter collapses:
+  //
+  //     t (s)      30     60     90    120    150    300
+  //     off      81.5%  80.7%  61.6%  47.1%  37.6%   7.7%     of a perfect velocity
+  //     45 deg   98.6%  98.6%  98.6%  98.6%  98.6%  98.6%
+  //
+  // and P(QZ,QZ) comes back inside its constraint, 177.3 to 0.0047.
+  //
+  // On NCLT 2012-08-20 replayed through the core it is much WORSE: 135.3 m with the
+  // limit off against 233.8 m at 90, 45 or 20 degrees, and 273.1 m at 10.
+  //
+  // The two results together are the useful part. Bounding the sampled rotations does
+  // fix the cancellation, so the mechanism is confirmed. But yaw genuinely IS
+  // unobservable, and a filter whose attitude covariance can no longer grow becomes
+  // overconfident and under-weights the corrections it needs. The synthetic has no GPS,
+  // so the overconfidence costs nothing there and the benefit shows pure.
+  //
+  // So the requirement is sharper than "bound the spread": the representation must let
+  // yaw uncertainty be LARGE while every sampled attitude stays a valid rotation. A
+  // linear covariance on a 4-vector with a norm constraint cannot do both. An error-state
+  // formulation can, because the uncertainty is a 3-vector in the tangent space and every
+  // sample is a rotation by construction. That is the direction #150 should take.
+  double max_sigma_rotation_deg = 0.0;
+
+  // Average the sigma points' attitudes in the TANGENT SPACE instead of summing the
+  // 4-vectors and renormalising.
+  //
+  // WHY: the plain sum is valid only while the spread is small, and the spread is set by
+  // P, not by dt. P(QZ,QZ) grows without bound because yaw is unobservable, so on a
+  // straight dead-reckoning run the sigma points end up scattered over many full
+  // rotations by t=77 s, their weighted sum nearly cancels, and normalising that residue
+  // yields an arbitrary direction. Measured: yaw flips 0.001 to -179.721 deg in ONE step
+  // while |q| stays exactly 1.0, position reverses, and the filter never recovers.
+  //
+  // DO NOT ENABLE THIS ON ITS OWN. It is half a migration and the half it is missing
+  // matters. Measured on the dead-reckoning run, perfect encoder 1 m/s, still IMU:
+  //
+  //     t          25      50     100     200     300     400      (truth x = t)
+  //     off      20.45   40.46   52.99   56.17   23.08   19.57
+  //     ON       30.51   55.06   99.38  186.75  259.09  275.30
+  //
+  // So it does remove the catastrophic failure: sigma(QZ) stays 0.11-0.47 instead of
+  // reaching 15.69, there is no 180 degree flip, and the filter is still advancing at
+  // t=400 where the plain sum has been wandering backwards for five minutes.
+  //
+  // But it OVERSHOOTS by 22% early (30.51 m at t=25) and accelerometer estimates
+  // oscillate +-5 m/s^2 on a still sensor where the plain sum reads 0.0000. The cause is
+  // that predict() still measures the covariance residual as a plain Euclidean
+  // difference sigma_pred.col(i) - x_pred. Move the mean onto the manifold and those
+  // residuals no longer sum to zero, so P picks up a spurious term that leaks through the
+  // quaternion/acceleration cross-covariance into the IMU update.
+  //
+  // Gating it on a large spread does not rescue it either: sigma(QZ) passes 1.0 within
+  // 5 seconds, so the gate would fire almost immediately and the inconsistent path would
+  // BE the normal path.
+  //
+  // The conclusion, which is the useful part: the mean and the residual have to move to
+  // the tangent space together, and the residual cannot until the state carries attitude
+  // error as a 3-vector. That is the full error-state rewrite (#150), and this flag is
+  // the evidence that the cheap half of it is not a shortcut. Kept, off, for that reason.
+  bool tangent_space_quaternion_mean = false;
+
   // Process noise: how much we trust the motion model
   double q_position     = 0.01;   // m²/step
   // Quaternion regularization: keeps Q positive-definite.
@@ -189,6 +277,9 @@ private:
 
   // Normalize angle components of state vector
   static StateVector normalize_state(const StateVector& x);
+  static Eigen::Vector4d quaternion_mean_tangent(const Eigen::MatrixXd & sigma_pred,
+                                                 const Eigen::VectorXd & Wm,
+                                                 int n_sigma);
 };
 
 } // namespace fusioncore

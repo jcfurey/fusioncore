@@ -142,6 +142,40 @@ Eigen::MatrixXd UKF::generate_sigma_points() {
     sigma.col(i + 1)          = state_.x + L.col(i);
     sigma.col(i + 1 + n_aug_) = state_.x - L.col(i);
   }
+
+  // Keep each sigma point's attitude a physically meaningful sample. See
+  // UKFParams::max_sigma_rotation_deg for why, and for why this bounds the POINTS and
+  // deliberately leaves P alone.
+  if (params_.max_sigma_rotation_deg > 0.0) {
+    const double max_rad = params_.max_sigma_rotation_deg * M_PI / 180.0;
+    Eigen::Vector4d q0 = state_.x.segment<4>(QW);
+    const double n0 = q0.norm();
+    if (n0 > 1e-9) {
+      q0 /= n0;
+      for (int c = 1; c < n_sigma; ++c) {
+        Eigen::Vector4d qs = sigma.col(c).segment<4>(QW);
+        const double ns = qs.norm();
+        if (ns < 1e-9) { sigma.col(c).segment<4>(QW) = q0; continue; }
+        qs /= ns;
+        // Same hemisphere, so the angle measured is the short way round.
+        double dot = q0.dot(qs);
+        if (dot < 0.0) { qs = -qs; dot = -dot; }
+        dot = std::min(1.0, std::max(-1.0, dot));
+        const double angle = 2.0 * std::acos(dot);        // rotation, radians
+        if (angle > max_rad) {
+          // Slerp back toward the mean until the rotation is exactly max_rad.
+          const double t = max_rad / angle;
+          const double theta = std::acos(dot);            // half-angle
+          const double sin_theta = std::sin(theta);
+          if (sin_theta > 1e-9) {
+            qs = (std::sin((1.0 - t) * theta) * q0 + std::sin(t * theta) * qs) / sin_theta;
+            qs.normalize();
+          }
+        }
+        sigma.col(c).segment<4>(QW) = qs;
+      }
+    }
+  }
   return sigma;
 }
 
@@ -161,13 +195,20 @@ void UKF::predict(double dt) {
     if (dot < 0.0) sigma_pred.col(i).segment<4>(QW) *= -1.0;
   }
 
-  // Weighted mean: normalize_state renormalizes the quaternion after summing.
-  // Simple weighted sum + normalize is accurate when sigma-point spread is small
-  // (guaranteed at 100 Hz where dt is tiny). No circular mean needed: the
-  // quaternion representation has no angle-wrapping discontinuity.
+  // Weighted mean. The non-attitude states are a plain weighted sum either way; only
+  // the quaternion is at issue.
+  //
+  // The plain sum plus renormalise is accurate ONLY while the sigma-point spread is
+  // small. An earlier comment here claimed that was guaranteed at 100 Hz because dt is
+  // tiny. That is wrong: the spread comes from P, not from dt, and P(QZ,QZ) grows
+  // without bound because yaw is unobservable. See tangent_space_quaternion_mean.
   StateVector x_pred = StateVector::Zero();
   for (int i = 0; i < n_sigma; ++i)
     x_pred += Wm_[i] * sigma_pred.col(i);
+
+  if (params_.tangent_space_quaternion_mean) {
+    x_pred.segment<4>(QW) = quaternion_mean_tangent(sigma_pred, Wm_, n_sigma);
+  }
   x_pred = normalize_state(x_pred);
 
   // Q is added per predict step (not scaled by dt).
@@ -366,6 +407,54 @@ double UKF::normalize_angle(double angle) {
   angle = std::fmod(angle + M_PI, 2.0 * M_PI);
   if (angle < 0.0) angle += 2.0 * M_PI;
   return angle - M_PI;
+}
+
+// Iterative tangent-space (Karcher) mean of the sigma points' attitudes.
+//
+// Repeatedly: express each sample as a rotation vector relative to the current reference
+// via the log map, take the weighted mean of those 3-vectors, and move the reference by
+// that much via the exp map. Unlike a 4-vector sum there is nothing to cancel, so a wide
+// spread degrades the answer gradually instead of flipping it.
+//
+// Converges in 2-3 passes for any realistic spread; the cap is a guard, not a budget.
+Eigen::Vector4d UKF::quaternion_mean_tangent(const Eigen::MatrixXd & sigma_pred,
+                                             const Eigen::VectorXd & Wm,
+                                             int n_sigma) {
+  Eigen::Quaterniond q_ref(sigma_pred(QW, 0), sigma_pred(QX, 0),
+                           sigma_pred(QY, 0), sigma_pred(QZ, 0));
+  if (q_ref.norm() < 1e-12) { return Eigen::Vector4d(1.0, 0.0, 0.0, 0.0); }
+  q_ref.normalize();
+
+  for (int iter = 0; iter < 8; ++iter) {
+    Eigen::Vector3d e_bar = Eigen::Vector3d::Zero();
+    double w_total = 0.0;
+    for (int i = 0; i < n_sigma; ++i) {
+      Eigen::Quaterniond qi(sigma_pred(QW, i), sigma_pred(QX, i),
+                            sigma_pred(QY, i), sigma_pred(QZ, i));
+      if (qi.norm() < 1e-12) { continue; }
+      qi.normalize();
+      Eigen::Quaterniond dq = q_ref.conjugate() * qi;
+      if (dq.w() < 0.0) { dq.coeffs() *= -1.0; }      // short way round
+      const double vn = dq.vec().norm();
+      // log map: 2*atan2(|v|, w) * v/|v|, with the small-angle limit handled directly.
+      Eigen::Vector3d e = Eigen::Vector3d::Zero();
+      if (vn >= 1e-12) { e = (2.0 * std::atan2(vn, dq.w()) / vn) * dq.vec(); }
+      e_bar += Wm[i] * e;
+      w_total += Wm[i];
+    }
+    if (std::abs(w_total) > 1e-12) { e_bar /= w_total; }
+
+    const double an = e_bar.norm();
+    if (an < 1e-10) { break; }
+    // exp map back onto the manifold.
+    const double half = 0.5 * an;
+    Eigen::Quaterniond dq(std::cos(half), 0, 0, 0);
+    dq.vec() = (std::sin(half) / an) * e_bar;
+    q_ref = q_ref * dq;
+    q_ref.normalize();
+    if (an < 1e-8) { break; }
+  }
+  return Eigen::Vector4d(q_ref.w(), q_ref.x(), q_ref.y(), q_ref.z());
 }
 
 StateVector UKF::normalize_state(const StateVector& x) {

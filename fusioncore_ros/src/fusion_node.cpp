@@ -44,6 +44,7 @@
 #include "fusioncore_ros/gnss_dop_gate_warning.hpp"
 #include "fusioncore_ros/min_satellites_gate.hpp"
 #include "fusioncore_ros/gnss_frame.hpp"
+#include "fusioncore_ros/lever_arm_config.hpp"
 
 using namespace std::chrono_literals;
 using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
@@ -146,9 +147,9 @@ public:
     // IMU lever arm (offset from base_link to IMU sensing point, body frame).
     // Leave at 0 to auto-resolve from TF (base_frame -> imu_frame translation
     // via the URDF). Set non-zero to override the TF value.
-    declare_parameter("imu.lever_arm_x", 0.0);
-    declare_parameter("imu.lever_arm_y", 0.0);
-    declare_parameter("imu.lever_arm_z", 0.0);
+    declare_parameter("imu.lever_arm_x", fusioncore_ros::lever_arm_unset());
+    declare_parameter("imu.lever_arm_y", fusioncore_ros::lever_arm_unset());
+    declare_parameter("imu.lever_arm_z", fusioncore_ros::lever_arm_unset());
 
     // Optional second IMU source. When non-empty, FusionCore subscribes to this
     // topic and calls update_imu() for each message, treating the two sensors as
@@ -303,9 +304,9 @@ public:
     // Antenna lever arm params: primary receiver.
     // Leave at 0 to auto-resolve from TF (base_frame -> GNSS msg frame_id
     // translation, via URDF); set non-zero to override.
-    declare_parameter("gnss.lever_arm_x", 0.0);
-    declare_parameter("gnss.lever_arm_y", 0.0);
-    declare_parameter("gnss.lever_arm_z", 0.0);
+    declare_parameter("gnss.lever_arm_x", fusioncore_ros::lever_arm_unset());
+    declare_parameter("gnss.lever_arm_y", fusioncore_ros::lever_arm_unset());
+    declare_parameter("gnss.lever_arm_z", fusioncore_ros::lever_arm_unset());
 
     // When true, the GNSS lever arm is applied from the very first fix, not
     // only after heading_validated_. Let RTK-grade fixes observe yaw directly
@@ -319,9 +320,9 @@ public:
     // (base_frame -> the second receiver's frame), set non-zero to override.
     // On a dual-antenna robot the URDF already knows where both antennas are,
     // so there is usually nothing to fill in here.
-    declare_parameter("gnss.lever_arm2_x", 0.0);
-    declare_parameter("gnss.lever_arm2_y", 0.0);
-    declare_parameter("gnss.lever_arm2_z", 0.0);
+    declare_parameter("gnss.lever_arm2_x", fusioncore_ros::lever_arm_unset());
+    declare_parameter("gnss.lever_arm2_y", fusioncore_ros::lever_arm_unset());
+    declare_parameter("gnss.lever_arm2_z", fusioncore_ros::lever_arm_unset());
 
     // PROJ coordinate reference system parameters
     // input.gnss_crs: CRS of incoming NavSatFix messages (default: WGS84 lat/lon)
@@ -397,6 +398,11 @@ public:
     declare_parameter("gnss.track_heading_cross_check_deg", 15.0);
     declare_parameter("gnss.track_heading_min_speed",    0.2);
     declare_parameter("gnss.track_heading_max_yaw_rate", 0.3);
+    // #144: discard the bearing window on the ANGLE turned across it rather than
+    // on one instantaneous yaw-rate sample. 0.0 keeps the rate check, so this is
+    // off by default and changes nothing until set. 5.0 is the value validated
+    // over five rover bags; see the core header for the numbers.
+    declare_parameter("gnss.track_heading_max_window_turn_deg", 0.0);
     declare_parameter("gnss.lever_arm_max_heading_sigma_deg", 20.0);
 
     declare_parameter("adaptive.imu",               true);
@@ -539,6 +545,7 @@ public:
     declare_parameter("ukf.q_gyro_bias",         1e-5);
     declare_parameter("ukf.q_accel_bias",        1e-5);
     declare_parameter("ukf.q_encoder_wz_bias",   1e-7);
+    declare_parameter("ukf.max_sigma_rotation_deg", 0.0);
 
     base_frame_   = get_parameter("base_frame").as_string();
     odom_frame_   = get_parameter("odom_frame").as_string();
@@ -572,10 +579,15 @@ public:
     // wrapper will auto-resolve from TF (base_frame -> imu_frame) on the
     // first IMU message and call fc_->set_imu_lever_arm() with
     // the translation it extracts from URDF.
-    config.imu.lever_arm.x = get_parameter("imu.lever_arm_x").as_double();
-    config.imu.lever_arm.y = get_parameter("imu.lever_arm_y").as_double();
-    config.imu.lever_arm.z = get_parameter("imu.lever_arm_z").as_double();
-    imu_lever_arm_explicit_ = !config.imu.lever_arm.is_zero();
+    {
+      const double lx = get_parameter("imu.lever_arm_x").as_double();
+      const double ly = get_parameter("imu.lever_arm_y").as_double();
+      const double lz = get_parameter("imu.lever_arm_z").as_double();
+      imu_lever_arm_explicit_ = fusioncore_ros::lever_arm_was_set(lx, ly, lz);
+      config.imu.lever_arm.x = fusioncore_ros::lever_arm_or_zero(lx);
+      config.imu.lever_arm.y = fusioncore_ros::lever_arm_or_zero(ly);
+      config.imu.lever_arm.z = fusioncore_ros::lever_arm_or_zero(lz);
+    }
     if (imu_lever_arm_explicit_) {
       RCLCPP_INFO(get_logger(),
         "IMU lever arm (explicit): x=%.3f y=%.3f z=%.3f m",
@@ -647,10 +659,15 @@ public:
     RCLCPP_INFO(get_logger(),
                 "GNSS min_fix_type: %d (1=GPS, 2=DGPS, 3=RTK_FLOAT, 4=RTK_FIXED)",
                 static_cast<int>(min_fix_type_));
-    gnss_lever_arm_.x = get_parameter("gnss.lever_arm_x").as_double();
-    gnss_lever_arm_.y = get_parameter("gnss.lever_arm_y").as_double();
-    gnss_lever_arm_.z = get_parameter("gnss.lever_arm_z").as_double();
-    gnss_lever_arm_explicit_ = !gnss_lever_arm_.is_zero();
+    {
+      const double lx = get_parameter("gnss.lever_arm_x").as_double();
+      const double ly = get_parameter("gnss.lever_arm_y").as_double();
+      const double lz = get_parameter("gnss.lever_arm_z").as_double();
+      gnss_lever_arm_explicit_ = fusioncore_ros::lever_arm_was_set(lx, ly, lz);
+      gnss_lever_arm_.x = fusioncore_ros::lever_arm_or_zero(lx);
+      gnss_lever_arm_.y = fusioncore_ros::lever_arm_or_zero(ly);
+      gnss_lever_arm_.z = fusioncore_ros::lever_arm_or_zero(lz);
+    }
     config.gnss.apply_lever_arm_pre_heading =
       get_parameter("gnss.apply_lever_arm_pre_heading").as_bool();
     if (config.gnss.apply_lever_arm_pre_heading) {
@@ -665,11 +682,29 @@ public:
       warn_if_lever_arm_unset("gnss.apply_lever_arm_pre_heading is true");
     }
 
-    gnss_lever_arm2_.x = get_parameter("gnss.lever_arm2_x").as_double();
-    gnss_lever_arm2_.y = get_parameter("gnss.lever_arm2_y").as_double();
-    gnss_lever_arm2_.z = get_parameter("gnss.lever_arm2_z").as_double();
-    gnss_lever_arm2_explicit_ = !gnss_lever_arm2_.is_zero();
+    {
+      const double lx = get_parameter("gnss.lever_arm2_x").as_double();
+      const double ly = get_parameter("gnss.lever_arm2_y").as_double();
+      const double lz = get_parameter("gnss.lever_arm2_z").as_double();
+      gnss_lever_arm2_explicit_ = fusioncore_ros::lever_arm_was_set(lx, ly, lz);
+      gnss_lever_arm2_.x = fusioncore_ros::lever_arm_or_zero(lx);
+      gnss_lever_arm2_.y = fusioncore_ros::lever_arm_or_zero(ly);
+      gnss_lever_arm2_.z = fusioncore_ros::lever_arm_or_zero(lz);
+    }
 
+    // Say which of the three states this is, always, including "explicitly zero".
+    // Gating the message on !is_zero() meant a deliberate zero logged NOTHING, so the
+    // only evidence that the TF auto-resolve had been skipped was the ABSENCE of a
+    // later line. Inferring behaviour from silence is how #148 survived a full
+    // benchmark run, so this now states it.
+    if (!gnss_lever_arm_explicit_) {
+      RCLCPP_INFO(get_logger(),
+        "GNSS lever arm (primary): unset, will auto-resolve from TF on the first fix");
+    } else if (gnss_lever_arm_.is_zero()) {
+      RCLCPP_INFO(get_logger(),
+        "GNSS lever arm (primary): explicitly ZERO, so the TF auto-resolve is skipped. "
+        "Remove gnss.lever_arm_x/y/z entirely to auto-resolve instead.");
+    }
     if (!gnss_lever_arm_.is_zero()) {
       RCLCPP_INFO(get_logger(),
         "GNSS lever arm (primary) set: x=%.3f y=%.3f z=%.3f m",
@@ -753,6 +788,8 @@ public:
     heading_xcheck_deg_ = config.gps_track_heading_cross_check_deg;
     config.gps_track_heading_min_speed     = get_parameter("gnss.track_heading_min_speed").as_double();
     config.gps_track_heading_max_yaw_rate  = get_parameter("gnss.track_heading_max_yaw_rate").as_double();
+    config.gps_track_heading_max_window_turn_deg =
+      get_parameter("gnss.track_heading_max_window_turn_deg").as_double();
     config.gnss_lever_arm_max_heading_sigma_deg =
       get_parameter("gnss.lever_arm_max_heading_sigma_deg").as_double();
 
@@ -778,6 +815,8 @@ public:
     config.ukf.q_gyro_bias          = get_parameter("ukf.q_gyro_bias").as_double();
     config.ukf.q_accel_bias         = get_parameter("ukf.q_accel_bias").as_double();
     config.ukf.q_encoder_wz_bias    = get_parameter("ukf.q_encoder_wz_bias").as_double();
+    config.ukf.max_sigma_rotation_deg =
+      get_parameter("ukf.max_sigma_rotation_deg").as_double();
 
     zupt_enabled_            = get_parameter("zupt.enabled").as_bool();
     zupt_velocity_threshold_ = get_parameter("zupt.velocity_threshold").as_double();
@@ -3298,6 +3337,7 @@ private:
     msg.heading_sigma_deg = d.heading_sigma_deg;
     msg.track_heading_state       = track_heading_state_str(d.track_heading_state);
     msg.track_heading_baseline_m  = d.track_heading_baseline_m;
+    msg.track_heading_window_turn_deg = d.track_heading_window_turn_deg;
     {
       const auto st_now = fc_->get_status();
       msg.heading_vs_track_deg = st_now.heading_vs_track_deg;
